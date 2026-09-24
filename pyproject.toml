@@ -1,0 +1,28 @@
+[project]
+name = "rebase-agent"
+version = "0.1.0"
+description = "Agentic auto-rebase for approved PRs"
+requires-python = ">=3.12"
+dependencies = [
+    "baml-py==0.226.2",
+    "pydantic==2.13.5",
+    "typing-extensions==4.16.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.8.17,<0.9.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest==9.1.1",
+    "ruff==0.16.8",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["llm: calls a real LLM; needs ANTHROPIC_API_KEY (skipped and reported as not run without it)"]
+
+[tool.ruff]
+line-length = 100
+extend-exclude = ["src/rebase_agent/baml_client", "docs"]

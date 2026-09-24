@@ -2,7 +2,7 @@
 
 > **Read first in every session:** this file and `docs/DECISIONS.md`. Don't re-explore the repo. Update both files when a decision changes.
 
-- **Status:** plan only. No application code yet. Waiting for review.
+- **Status:** Phase 1 in progress. Step 1 (BAML smoke test) passes with `make baml-smoke`; the live call has not run yet because no `ANTHROPIC_API_KEY` was available.
 - **Deadline:** demo on Mon Sept 28, 4 PM. The plan was written Thu Sept 24.
 
 ---
@@ -18,7 +18,8 @@ These are the latest PyPI releases as of 2026-09-24. Exact pins go in `pyproject
 | `baml-py` | `==0.226.2` | Analysts, orchestrator, verifier intent check. The `generators.baml` block uses `version "0.226.2"`, which must match. |
 | `claude-agent-sdk` | `==0.2.159` | Resolver agent loop |
 | `mcp` | `==2.2.0` | Our stdio MCP server and the resolver's MCP client config |
-| `pydantic` | `==2.13.5` | Internal types |
+| `pydantic` | `==2.13.5` | Internal types. The generated `baml_client` also needs it, but `baml-py` doesn't install it (found in the Phase 1 smoke test). |
+| `typing-extensions` | `==4.16.0` | Imported by the generated `baml_client`; not installed by `baml-py` either |
 | `typer` | `==0.27.2` | CLIs |
 | `httpx` | pinned in Phase 1 (latest) | GitHub REST (list PRs, comments) |
 | `pytest` | `==9.1.1` | Tests (dev) |
@@ -517,7 +518,7 @@ Each question has a proposed answer, but none is decided. Please answer or appro
   - Locally, every scenario is still its own isolated repo.
 - **Q6 — Confidence floor.** Should `combine` escalate when `confidence < 0.7` even if the action is auto_rebase? *Proposal:* yes, 0.7, configurable.
 - **Q7 — Cost numbers.** Cost is estimated from reported token usage × a per-model price table in `config.py`, filled from Anthropic's published pricing at implementation time. Is an estimate acceptable in PR comments?
-- **Q8 — Generated `baml_client/`.** *Proposal:* gitignore it and generate in `make` and CI. The alternative is to commit it so Actions skips the generate step.
+- **Q8 — Generated `baml_client/`.** *Proposal:* gitignore it and generate in `make` and CI. The alternative is to commit it so Actions skips the generate step. *Phase 1 went with the proposal for now (`.gitignore`, `make generate`); easy to reverse.*
 - **Q9 — Resolver caps.** *Proposal:* 20 turns and $1.00 per PR. OK?
 - **Q10 — Eval repetitions.** N=1 (cheap, noisy) or N=3 (better signal, ~3× cost and time)? *Proposal:* N=1, and N=3 for the orchestrator only if time allows.
 - **Q11 — Which "config" files force escalation?** The brief names migrations, auth, lockfiles and CI as hard rules. *Proposal:* "config" files are a signal only, not a forced escalation, unless you list specific paths.
