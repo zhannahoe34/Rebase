@@ -2,8 +2,67 @@
 
 > **Read first in every session:** this file and `docs/DECISIONS.md`. Don't re-explore the repo. Update both files when a decision changes.
 
-- **Status:** plan only. No application code yet. Waiting for review.
+- **Status:** Phase 1 done ([zhannahoe34/Rebase#2](https://github.com/zhannahoe34/Rebase/pull/2)), except two items:
+  - The live BAML call hasn't run yet (no `ANTHROPIC_API_KEY` in that session).
+  - Generator `--push` mode is deferred to Phase 4.
+- **Next:** Phase 2 (review gate).
 - **Deadline:** demo on Mon Sept 28, 4 PM. The plan was written Thu Sept 24.
+
+---
+
+## Handoff: start of the next session
+
+### 1. Get the code
+- If PR #2 is merged, branch from `main`.
+- If PR #2 is still open, branch from `claude/agentic-rebase-plan-tpyyi7`, which has all of Phase 1.
+
+Either way, create a new branch for Phase 2; that's one PR per phase.
+
+### 2. Set up and check the key (don't skip)
+```bash
+uv sync
+make generate      # baml_client is gitignored; nothing imports until this runs
+make baml-smoke    # must be 5 passed, 0 skipped: the live call proves ANTHROPIC_API_KEY works
+make test && make lint
+make sandbox       # builds .sandbox/<scenario> local repos
+```
+If the live call is skipped or fails, stop and tell the user before doing any Phase 2 work: every Phase 2 acceptance test needs a real LLM.
+
+### 3. Things already learned (don't re-discover them)
+- **BAML 0.226.2 API** (checked in Phase 1):
+  - `ClientRegistry().add_llm_client(name=, provider="anthropic", options={"model": ...})`, then `.set_primary(name)`.
+  - Call with `b.with_options(client_registry=..., collector=Collector(name=...)).Fn(...)`.
+  - The collector exposes `.last` and `.usage`. `b.request.Fn(...)` builds the HTTP request offline.
+  - The generated client needs `pydantic` and `typing-extensions`, both pinned.
+- **Ruff 0.16:**
+  - It enforces `PLW1510` (every `subprocess.run` needs an explicit `check=`).
+  - It formats Python blocks inside Markdown, so `docs/` is excluded in `pyproject.toml`.
+- **Where scenario PR title, body and expected outcome live:** `sandbox_gen.scenarios.SCENARIOS[name]` (`.merged`, `.pr`, `.expected`). They're also in the commit messages. In the local repos: tag `base` = main before the push, `main` = after, and `pr/<name>` = the PR.
+- **Signals:** `rebase_agent.signals.compute_signals(repo, base, merged, pr_head)`. Path classifiers are in `rebase_agent/config.py`; policy should reuse them, not duplicate them.
+- **Git conventions (user preference):** no `Co-Authored-By`, `Claude-Session` or other attribution lines in commits or PR descriptions.
+
+### 4. Phase 2 checklist (details in the Phase 2 section)
+1. **Price table:** get current per-model prices from Anthropic's published pricing (the `claude-api` skill or the docs). Store them in `config.py` with the source URL and date. Never guess.
+2. **Types:** add `PRSummary`, `Decision`, `PolicyResult`, `FinalDecision` and the ledger row types to `models.py`, following §0.4.
+3. **BAML functions:**
+   - `baml_src/analysts.baml`: `SummarizeChange`
+   - `baml_src/orchestrator.baml`: `DecideRebase`
+
+   Models come from env/config via `ClientRegistry`, never hardcoded (§0.2). Delete `smoke.baml` only if the smoke test moves onto a real function.
+4. **Cost ledger** (§0.6): one JSONL row per call, plus a `rebase-agent costs <run_dir>` command.
+5. **Policy:** `policy.py` with `apply_policy` and `combine`. Add a property test that policy escalation can never be overridden. Add the 0.7 confidence floor as a configurable setting, and say in the PR that Q6 is still open.
+6. **CLI:**
+   - `rebase-agent decide`: one PR, prints the `FinalDecision` plus cost.
+   - `rebase-agent setup`: computes the merged summary once and writes JSON.
+7. **Scenario tests** (`@pytest.mark.llm`, real LLM, never mocked):
+   - policy scenarios → escalate, with the rule named
+   - trivial and real_conflict → auto_rebase
+   - semantic_break → record the orchestrator's decision as a note, not pass/fail (Q3)
+8. **Wrap-up:** update this file and DECISIONS.md, open the Phase 2 PR (what works, what doesn't, exact commands, total LLM spend), then **stop for review**.
+
+### 5. Coming later
+- **Phase 4 needs `RebaseSandbox` access.** Try `add_repo` first; if that fails, stop and ask the user to switch the session's repo.
+- **Q2b** (a GitHub App token for authoring sandbox PRs) and **Q5** (per-scenario base branches) need confirming at the start of Phase 4.
 
 ---
 
@@ -18,7 +77,8 @@ These are the latest PyPI releases as of 2026-09-24. Exact pins go in `pyproject
 | `baml-py` | `==0.226.2` | Analysts, orchestrator, verifier intent check. The `generators.baml` block uses `version "0.226.2"`, which must match. |
 | `claude-agent-sdk` | `==0.2.159` | Resolver agent loop |
 | `mcp` | `==2.2.0` | Our stdio MCP server and the resolver's MCP client config |
-| `pydantic` | `==2.13.5` | Internal types |
+| `pydantic` | `==2.13.5` | Internal types. The generated `baml_client` also needs it, but `baml-py` doesn't install it (found in the Phase 1 smoke test). |
+| `typing-extensions` | `==4.16.0` | Imported by the generated `baml_client`; not installed by `baml-py` either |
 | `typer` | `==0.27.2` | CLIs |
 | `httpx` | pinned in Phase 1 (latest) | GitHub REST (list PRs, comments) |
 | `pytest` | `==9.1.1` | Tests (dev) |
@@ -83,10 +143,11 @@ src/rebase_agent/
   pipeline.py            # run_pr(): end-to-end per PR
   cli.py                 # `rebase-agent` typer app
   baml_client/           # generated (Q8)
-sandbox_gen/
+src/sandbox_gen/         # under src/ so uv_build packages it next to rebase_agent
   generator.py           # `rebase-sandbox` CLI
   template/              # tiny Python pkg + pytest suite + migrations/ + uv.lock + workflow yml
-  scenarios/{trivial,real_conflict,semantic_break,migration_collision,lockfile_touch}.py
+  assets/                # scenario-specific files (e.g. the bumped uv.lock)
+  scenarios/{base,trivial,real_conflict,semantic_break,migration_collision,lockfile_touch}.py
 skills/rebase-playbook/SKILL.md
 eval/
   run_eval.py
@@ -213,6 +274,26 @@ PR summary ─┘                                   │
 
 On a clean rebase the resolver agent is **not** invoked (`status="clean"`). This matters for `semantic_break`: the resolver must not "fix" the call site, so the verifier is the one that catches it.
 
+### 0.6 Cost ledger (Q7)
+
+Every dollar is recorded, so the demo can quote real numbers.
+
+- **One ledger row per model call**, appended to a JSONL file: `runs/<run_id>/ledger.jsonl` locally, and uploaded as an Actions artifact in CI. Fields:
+  - `run_id`, `pr`, `scenario`, `stage` (analyst_merged / analyst_pr / orchestrator / resolver / verifier_intent)
+  - `model`
+  - `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`
+  - `usd_per_mtok` for each token kind, `cost_usd`, `cost_source`
+  - `latency_s`, `timestamp`
+- **Two cost sources, labelled:**
+  - BAML calls use `estimated`: tokens from the BAML `Collector` × the price table.
+  - Agent SDK calls use `sdk_reported`: the SDK's own reported cost. We also recompute it from tokens and log any difference.
+- **Price table** in `config.py`, taken from Anthropic's published pricing when Phase 2 starts, with the source URL and date stored next to it. It is never guessed. A model missing from the table is an error, not $0.
+- **Rollups:**
+  - `rebase-agent costs runs/<run_id>` prints per-stage, per-PR, per-model and total spend.
+  - The PR comment shows a per-stage breakdown and the total.
+  - The eval table (Phase 5) has cost per scenario × model plus the grand total of the eval run itself.
+- **Merged-change summary:** its cost is shown once per run, not per PR, and is also shown split across PRs, to show the saving from reuse.
+
 ---
 
 ## Phase 1 — Sandbox generator + deterministic signals CLI
@@ -227,10 +308,10 @@ On a clean rebase the resolver agent is **not** invoked (`status="clean"`). This
    4. If `ANTHROPIC_API_KEY` is set, make one live call.
 
    Wrap this as `make baml-smoke`. **If generation or import fails, stop the phase and report.**
-2. `sandbox_gen/template/`: a small Python package (e.g. `shop/pricing.py`, `shop/inventory.py`, `shop/auth/…`) with a pytest suite, `migrations/0001_init.sql`, `migrations/0002_*.sql`, a `uv.lock`, and a CI workflow file.
+2. `src/sandbox_gen/template/`: a small Python package (e.g. `shop/pricing.py`, `shop/inventory.py`, `shop/auth/…`) with a pytest suite, `migrations/0001_init.sql`, `migrations/0002_*.sql`, a `uv.lock`, and a CI workflow file.
 3. Scenario modules. Each one defines `base` edits, `merged` edits, `pr` edits, `expected: ExpectedOutcome` and `expected_signals`.
 4. Local mode: `generate --local DIR --scenario X` builds a git repo with `main` at merged, a `base` tag, and a `pr/X` branch.
-5. Push mode: `generate --push` force-resets the sandbox repo and (re)opens the PRs. Push mode can slip to Phase 4 if needed, but the code is written here.
+5. Push mode: `generate --push` force-resets the sandbox repo and (re)opens the PRs. **Deferred to Phase 4:** it can't be tested until Q1 (the sandbox repo) and Q5 (the wave layout) are answered, so for now it exits with "not implemented" rather than shipping untested code.
 6. Idempotency: fixed author/committer name, email and dates make commit SHAs deterministic.
 7. The signals modules and the `rebase-agent signals` CLI (JSON output).
 
@@ -274,7 +355,7 @@ On a clean rebase the resolver agent is **not** invoked (`status="clean"`). This
 **Work**
 - `baml_src/analysts.baml` has `SummarizeChange(diff, title, body) -> PRSummary`. `baml_src/orchestrator.baml` has `DecideRebase(signals, merged, pr) -> Decision`. The prompts say the orchestrator has no repo access and must give reasons.
 - The model is chosen at runtime with a BAML `ClientRegistry` built from `config.py`. Check the exact API against the 0.226.2 docs.
-- Token usage comes from a BAML collector. Cost = usage × price table (Q7).
+- Token usage comes from a BAML collector. Every call writes a cost ledger row (§0.6), and `rebase-agent costs` reports the rollups.
 - `policy.py` has two pieces:
   - `apply_policy(signals)` hits a rule if the merged change or the PR touches migration, lockfile, ci or auth. Config files are reported but not forced (Q11).
   - `combine()`: `action = "escalate" if policy.force_escalate or decision.action == "escalate" else "auto_rebase"`.
@@ -295,7 +376,7 @@ On a clean rebase the resolver agent is **not** invoked (`status="clean"`). This
   | `lockfile_touch` | `final.action == "escalate"`, the lockfile rule in `rules_hit` |
   | `trivial` | `final.action == "auto_rebase"` |
   | `real_conflict` | `final.action == "auto_rebase"` |
-  | `semantic_break` | Record and report the orchestrator's action. Pass/fail depends on Q3. |
+  | `semantic_break` | Not pass/fail: record the orchestrator's action and reasons in the test output (Q3). The pass/fail check is `--force-resolve` in Phase 3. |
 
 - Test that the merged-change summary is computed once per run: a call counter on `summarize_change` in the pipeline test.
 
@@ -360,7 +441,7 @@ On a clean rebase the resolver agent is **not** invoked (`status="clean"`). This
 |---|---|
 | `trivial` | resolver `clean` → verifier `pass` → stale `unchanged` → `final == "pushed"` (dry-run: "would push") |
 | `real_conflict` | resolver `resolved` → tests pass → verifier `pass` → stale `unchanged` → would push |
-| `semantic_break` | if the orchestrator says auto_rebase: resolver `clean` → tests **fail** → `verifier.verdict == "escalate"`, `stage == "verifier"`. Also covered with `--force-resolve` (Q3). |
+| `semantic_break` | **Pass/fail via `--force-resolve`:** resolver `clean` → tests **fail** → `verifier.verdict == "escalate"`, `stage == "verifier"`, `final == "escalated"`. On the normal path, the orchestrator's decision is recorded as a note, not pass/fail (Q3). |
 | `migration_collision`, `lockfile_touch` | `stage == "policy"`, resolver never constructed (asserted) |
 | Cap test | `real_conflict` with `max_turns=1` → `status == "escalated"` and a reason that names the cap |
 
@@ -388,7 +469,7 @@ Unit tests (no LLM):
 **Goal:** a push to sandbox `main` rebases or escalates every eligible open PR on GitHub, and each one gets a comment.
 
 **Work**
-- The workflow is `sandbox_gen/template/.github/workflows/rebase.yml`, installed into the sandbox by the generator.
+- The workflow is `src/sandbox_gen/template/.github/workflows/rebase.yml`, installed into the sandbox by the generator.
   - `on: push: branches: [main]`
   - `concurrency: rebase-${{ github.ref }}`
 - **setup job:**
@@ -428,10 +509,11 @@ Unit tests (no LLM):
   - expected vs actual final
   - decision correct ✓/✗
   - resolution success
-  - verifier catch (on `semantic_break`)
-  - cost USD
+  - verifier catch (on `semantic_break`, run with `--force-resolve`)
+  - orchestrator note (what it decided on the normal path; Q3)
+  - cost USD (from the ledger, split by stage) and tokens
   - latency s
-- It also writes a totals row and the raw JSON.
+- It also writes a totals row (including the eval run's own total spend), the raw JSON and the ledger.
 
 **Acceptance criteria**
 - `uv run python eval/run_eval.py --models haiku,sonnet,opus` writes the table.
@@ -493,32 +575,39 @@ Never cut: policy tests, the verifier, or honest PR notes.
 5. **Cut scope, not quality.** One MCP server, one skill, a small model sweep, range-diff only for stale approvals.
 6. Local CLI first. The whole pipeline must work against a local clone before Phase 4.
 7. Only the sandbox repo, never a real work repo. Never use `GITHUB_TOKEN` for pushes.
+8. No attribution lines (`Co-Authored-By`, `Claude-Session`, "Generated with…") in commits or PR descriptions.
 
 ---
 
+## Questions: answered (review of 2026-09-24)
+
+- **Q1 — Sandbox repo.** `zhannahoe34/RebaseSandbox` exists. The session may only get access to one repo at a time. **Action:** before Phase 4 needs the sandbox, stop and ask the user to switch access (try `add_repo` first).
+- **Q2 — Approval.** The user approves sandbox PRs on GitHub themselves, and eligibility = at least one APPROVED review. **Caveat (still open, see Q2b):** GitHub doesn't let an account approve a PR it authored, and PRs opened with the user's own PAT are authored by the user.
+- **Q3 — `semantic_break`.** Don't count an orchestrator-stage escalation as a pass. Instead:
+  - Build the deterministic path: `--force-resolve` skips the orchestrator (policy still enforced). With it, the acceptance test requires `stage == "verifier"` and `final == "escalated"`.
+  - On the normal path, record what the orchestrator decided (the stage, decision and reasons) in test output and the eval table, as a note rather than a pass or fail.
+  - Symbol overlap stays definitions-only (done in Phase 1).
+- **Q4 — Stale check.** Accepted: "patch unchanged" means identical added and removed lines per commit, ignoring context and hunk headers. `real_conflict` already has this property (tested in Phase 1).
+- **Q5 — GitHub layout.** Not final, but the user prefers **branches over reusing `main`**. Working proposal for Phase 4:
+  - Each scenario (or wave) gets its own long-lived base branch, e.g. `base/<scenario>`, that stands in for `main`.
+  - PRs target that branch, and the workflow triggers on pushes to `main` and `base/**`.
+  - All scenarios then coexist in the sandbox without resets clobbering each other.
+
+  Confirm this at the start of Phase 4.
+- **Q6 — Confidence floor.** Deferred; the user wants the meaning of "escalate" clarified first. **Escalate** means the system does **not** rebase or push: the PR branch stays as it is, and a PR comment explains why (decision, reasons, signals, cost) so a human handles it. Proposal unchanged: an auto_rebase with confidence < 0.7 is treated as escalate.
+- **Q7 — Cost transparency.** Yes, and in depth: record every dollar. See §0.6 (cost ledger).
+- **Q8 — Generated `baml_client/`.** Gitignored, generated by `make generate` and CI (done).
+- **Q9 — Resolver caps.** 20 turns and $1.00 per PR (defaults, configurable).
+- **Q10 — Eval repetitions.** N=1 by default; N=3 for the orchestrator if time allows.
+
 ## Open questions
 
-Each question has a proposed answer, but none is decided. Please answer or approve.
+- **Q2b — Who authors sandbox PRs?** If the generator opens PRs with the user's PAT, the user is the author and GitHub blocks self-approval. Options:
+  1. **GitHub App token** for the generator, so PRs are authored by the app's bot account and the user can approve. It also satisfies "PAT or App token".
+  2. A second GitHub account opens the PRs.
+  3. Fall back to the `approved` label.
 
-- **Q1 — Sandbox and repo access.** Does `zhannahoe34/RebaseSandbox` exist, or should Phase 1 assume you'll create it? Is `Rebase` public? The sandbox workflow must check it out. If `Rebase` is private, `SANDBOX_REPO_TOKEN` also needs read on `Rebase`.
-- **Q2 — What counts as "approved"?** A single account can't approve its own PR. *Proposal:* PRs labelled `approved` are eligible. Alternatives: all open non-draft PRs, or PRs with an APPROVED review from a second account.
-- **Q3 — Can `semantic_break` reach the verifier?** It depends on the orchestrator saying auto_rebase, but a strong orchestrator may escalate first after reading "signature changed" + "adds calls". That would hide the headline case. *Proposal:*
-  1. Symbol overlap covers modified definitions only, not call sites.
-  2. Acceptance: final is escalate, with `stage == "verifier"` whenever the orchestrator chose auto_rebase.
-  3. Add a `--force-resolve` flag that skips the orchestrator (policy still enforced) so the demo can show the verifier catch deterministically.
-
-  **Need your call:** does an orchestrator-stage escalation on `semantic_break` count as a pass?
-- **Q4 — Stale check vs `real_conflict`.** Strict range-diff flags any conflict resolution, because context changes, so `real_conflict` would always escalate. *Proposal:*
-  - "patch unchanged" means identical added and removed lines per commit, ignoring context and hunk headers
-  - `real_conflict` is designed so a correct resolution keeps both sides' lines intact
-- **Q5 — GitHub demo layout.** All scenarios can't share one `main`, because a lockfile change on `main` would escalate every PR. *Proposal:*
-  - **Wave A:** one merged change, with `trivial`, `real_conflict` and `semantic_break` PRs. This shows the matrix fan-out.
-  - **Wave B:** a merged change that adds a migration and bumps the lockfile, with `migration_collision` and `lockfile_touch` PRs.
-  - Locally, every scenario is still its own isolated repo.
-- **Q6 — Confidence floor.** Should `combine` escalate when `confidence < 0.7` even if the action is auto_rebase? *Proposal:* yes, 0.7, configurable.
-- **Q7 — Cost numbers.** Cost is estimated from reported token usage × a per-model price table in `config.py`, filled from Anthropic's published pricing at implementation time. Is an estimate acceptable in PR comments?
-- **Q8 — Generated `baml_client/`.** *Proposal:* gitignore it and generate in `make` and CI. The alternative is to commit it so Actions skips the generate step.
-- **Q9 — Resolver caps.** *Proposal:* 20 turns and $1.00 per PR. OK?
-- **Q10 — Eval repetitions.** N=1 (cheap, noisy) or N=3 (better signal, ~3× cost and time)? *Proposal:* N=1, and N=3 for the orchestrator only if time allows.
+  *Proposal:* option 1, else option 3.
+- **Q6 — Confidence floor**, see above.
 - **Q11 — Which "config" files force escalation?** The brief names migrations, auth, lockfiles and CI as hard rules. *Proposal:* "config" files are a signal only, not a forced escalation, unless you list specific paths.
-- **Q12 — Auth paths.** *Proposal:* `**/auth/**` and `**/*auth*.py` in the sandbox template. Any others?
+- **Q12 — Auth paths.** *Proposal:* `**/auth/**` and `**/*auth*.py` (as implemented in Phase 1). Any others?

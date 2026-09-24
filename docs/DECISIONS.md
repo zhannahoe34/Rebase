@@ -130,5 +130,15 @@ The whole pipeline must work as a CLI against a local clone before Phase 4.
 
 ---
 
+## D18 — Review answers (2026-09-24)
+- **Escalate** = no rebase and no push. The PR is left as is, and a comment explains the decision, reasons, signals and cost for a human.
+- **semantic_break:** the pass/fail check is the deterministic `--force-resolve` path, which must be caught by the verifier. An early escalation by the orchestrator on the normal path is recorded as a note, not counted as a pass.
+- **Stale check:** "patch unchanged" = identical added/removed lines per commit (context ignored).
+- **Cost:** full ledger of every model call (tokens, prices, cost, source, latency) with rollups per stage, PR, model and run (PLAN.md §0.6).
+- **Approval:** eligibility = an APPROVED review, given by the user on GitHub. Who authors the PRs is still open (PLAN.md Q2b).
+- **Sandbox layout:** prefer per-scenario base branches over reusing `main` (to confirm in Phase 4).
+- **Settled defaults:** resolver caps of 20 turns and $1.00; eval N=1 (N=3 for the orchestrator if time allows); the generated BAML client is gitignored.
+
 ## Changelog
 - 2026-09-24: Initial version from the kickoff brief.
+- 2026-09-24: D18 added from the user's answers to the open questions.
