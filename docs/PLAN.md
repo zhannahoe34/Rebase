@@ -2,7 +2,9 @@
 
 > **Read first in every session:** this file and `docs/DECISIONS.md`. Don't re-explore the repo. Update both files when a decision changes.
 
-- **Status:** Phase 1 in progress. Step 1 (BAML smoke test) passes with `make baml-smoke`; the live call has not run yet because no `ANTHROPIC_API_KEY` was available.
+- **Status:** Phase 1 done except two items:
+  - The live BAML call hasn't run yet (no `ANTHROPIC_API_KEY` in the session).
+  - Generator `--push` mode is deferred to Phase 4, because Q1 (the sandbox repo) is open.
 - **Deadline:** demo on Mon Sept 28, 4 PM. The plan was written Thu Sept 24.
 
 ---
@@ -84,10 +86,11 @@ src/rebase_agent/
   pipeline.py            # run_pr(): end-to-end per PR
   cli.py                 # `rebase-agent` typer app
   baml_client/           # generated (Q8)
-sandbox_gen/
+src/sandbox_gen/         # under src/ so uv_build packages it next to rebase_agent
   generator.py           # `rebase-sandbox` CLI
   template/              # tiny Python pkg + pytest suite + migrations/ + uv.lock + workflow yml
-  scenarios/{trivial,real_conflict,semantic_break,migration_collision,lockfile_touch}.py
+  assets/                # scenario-specific files (e.g. the bumped uv.lock)
+  scenarios/{base,trivial,real_conflict,semantic_break,migration_collision,lockfile_touch}.py
 skills/rebase-playbook/SKILL.md
 eval/
   run_eval.py
@@ -228,10 +231,10 @@ On a clean rebase the resolver agent is **not** invoked (`status="clean"`). This
    4. If `ANTHROPIC_API_KEY` is set, make one live call.
 
    Wrap this as `make baml-smoke`. **If generation or import fails, stop the phase and report.**
-2. `sandbox_gen/template/`: a small Python package (e.g. `shop/pricing.py`, `shop/inventory.py`, `shop/auth/…`) with a pytest suite, `migrations/0001_init.sql`, `migrations/0002_*.sql`, a `uv.lock`, and a CI workflow file.
+2. `src/sandbox_gen/template/`: a small Python package (e.g. `shop/pricing.py`, `shop/inventory.py`, `shop/auth/…`) with a pytest suite, `migrations/0001_init.sql`, `migrations/0002_*.sql`, a `uv.lock`, and a CI workflow file.
 3. Scenario modules. Each one defines `base` edits, `merged` edits, `pr` edits, `expected: ExpectedOutcome` and `expected_signals`.
 4. Local mode: `generate --local DIR --scenario X` builds a git repo with `main` at merged, a `base` tag, and a `pr/X` branch.
-5. Push mode: `generate --push` force-resets the sandbox repo and (re)opens the PRs. Push mode can slip to Phase 4 if needed, but the code is written here.
+5. Push mode: `generate --push` force-resets the sandbox repo and (re)opens the PRs. **Deferred to Phase 4:** it can't be tested until Q1 (the sandbox repo) and Q5 (the wave layout) are answered, so for now it exits with "not implemented" rather than shipping untested code.
 6. Idempotency: fixed author/committer name, email and dates make commit SHAs deterministic.
 7. The signals modules and the `rebase-agent signals` CLI (JSON output).
 
@@ -389,7 +392,7 @@ Unit tests (no LLM):
 **Goal:** a push to sandbox `main` rebases or escalates every eligible open PR on GitHub, and each one gets a comment.
 
 **Work**
-- The workflow is `sandbox_gen/template/.github/workflows/rebase.yml`, installed into the sandbox by the generator.
+- The workflow is `src/sandbox_gen/template/.github/workflows/rebase.yml`, installed into the sandbox by the generator.
   - `on: push: branches: [main]`
   - `concurrency: rebase-${{ github.ref }}`
 - **setup job:**

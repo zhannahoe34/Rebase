@@ -1,4 +1,6 @@
-.PHONY: generate baml-smoke lint test
+.PHONY: generate baml-smoke lint test sandbox
+
+SANDBOX_DIR ?= .sandbox
 
 generate:
 	uv run baml-cli generate
@@ -12,3 +14,7 @@ lint:
 
 test: generate
 	uv run pytest -rs
+
+# Build every scenario as a local repo under $(SANDBOX_DIR)/<scenario>
+sandbox:
+	uv run rebase-sandbox generate --local $(SANDBOX_DIR)

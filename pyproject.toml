@@ -6,6 +6,7 @@ requires-python = ">=3.12"
 dependencies = [
     "baml-py==0.226.2",
     "pydantic==2.13.5",
+    "typer==0.27.2",
     "typing-extensions==4.16.0",
 ]
 
@@ -26,3 +27,10 @@ markers = ["llm: calls a real LLM; needs ANTHROPIC_API_KEY (skipped and reported
 [tool.ruff]
 line-length = 100
 extend-exclude = ["src/rebase_agent/baml_client", "docs"]
+
+[project.scripts]
+rebase-agent = "rebase_agent.cli:app"
+rebase-sandbox = "sandbox_gen.generator:app"
+
+[tool.uv.build-backend]
+module-name = ["rebase_agent", "sandbox_gen"]

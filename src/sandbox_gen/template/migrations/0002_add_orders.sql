@@ -1,0 +1,1 @@
+CREATE TABLE orders (id INTEGER PRIMARY KEY, product_id INTEGER REFERENCES products(id), qty INTEGER NOT NULL);
