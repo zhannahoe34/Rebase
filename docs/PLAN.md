@@ -2,10 +2,67 @@
 
 > **Read first in every session:** this file and `docs/DECISIONS.md`. Don't re-explore the repo. Update both files when a decision changes.
 
-- **Status:** Phase 1 done except two items:
-  - The live BAML call hasn't run yet (no `ANTHROPIC_API_KEY` in the session).
-  - Generator `--push` mode is deferred to Phase 4, because Q1 (the sandbox repo) is open.
+- **Status:** Phase 1 done ([zhannahoe34/Rebase#2](https://github.com/zhannahoe34/Rebase/pull/2)), except two items:
+  - The live BAML call hasn't run yet (no `ANTHROPIC_API_KEY` in that session).
+  - Generator `--push` mode is deferred to Phase 4.
+- **Next:** Phase 2 (review gate).
 - **Deadline:** demo on Mon Sept 28, 4 PM. The plan was written Thu Sept 24.
+
+---
+
+## Handoff: start of the next session
+
+### 1. Get the code
+- If PR #2 is merged, branch from `main`.
+- If PR #2 is still open, branch from `claude/agentic-rebase-plan-tpyyi7`, which has all of Phase 1.
+
+Either way, create a new branch for Phase 2; that's one PR per phase.
+
+### 2. Set up and check the key (don't skip)
+```bash
+uv sync
+make generate      # baml_client is gitignored; nothing imports until this runs
+make baml-smoke    # must be 5 passed, 0 skipped: the live call proves ANTHROPIC_API_KEY works
+make test && make lint
+make sandbox       # builds .sandbox/<scenario> local repos
+```
+If the live call is skipped or fails, stop and tell the user before doing any Phase 2 work: every Phase 2 acceptance test needs a real LLM.
+
+### 3. Things already learned (don't re-discover them)
+- **BAML 0.226.2 API** (checked in Phase 1):
+  - `ClientRegistry().add_llm_client(name=, provider="anthropic", options={"model": ...})`, then `.set_primary(name)`.
+  - Call with `b.with_options(client_registry=..., collector=Collector(name=...)).Fn(...)`.
+  - The collector exposes `.last` and `.usage`. `b.request.Fn(...)` builds the HTTP request offline.
+  - The generated client needs `pydantic` and `typing-extensions`, both pinned.
+- **Ruff 0.16:**
+  - It enforces `PLW1510` (every `subprocess.run` needs an explicit `check=`).
+  - It formats Python blocks inside Markdown, so `docs/` is excluded in `pyproject.toml`.
+- **Where scenario PR title, body and expected outcome live:** `sandbox_gen.scenarios.SCENARIOS[name]` (`.merged`, `.pr`, `.expected`). They're also in the commit messages. In the local repos: tag `base` = main before the push, `main` = after, and `pr/<name>` = the PR.
+- **Signals:** `rebase_agent.signals.compute_signals(repo, base, merged, pr_head)`. Path classifiers are in `rebase_agent/config.py`; policy should reuse them, not duplicate them.
+- **Git conventions (user preference):** no `Co-Authored-By`, `Claude-Session` or other attribution lines in commits or PR descriptions.
+
+### 4. Phase 2 checklist (details in the Phase 2 section)
+1. **Price table:** get current per-model prices from Anthropic's published pricing (the `claude-api` skill or the docs). Store them in `config.py` with the source URL and date. Never guess.
+2. **Types:** add `PRSummary`, `Decision`, `PolicyResult`, `FinalDecision` and the ledger row types to `models.py`, following §0.4.
+3. **BAML functions:**
+   - `baml_src/analysts.baml`: `SummarizeChange`
+   - `baml_src/orchestrator.baml`: `DecideRebase`
+
+   Models come from env/config via `ClientRegistry`, never hardcoded (§0.2). Delete `smoke.baml` only if the smoke test moves onto a real function.
+4. **Cost ledger** (§0.6): one JSONL row per call, plus a `rebase-agent costs <run_dir>` command.
+5. **Policy:** `policy.py` with `apply_policy` and `combine`. Add a property test that policy escalation can never be overridden. Add the 0.7 confidence floor as a configurable setting, and say in the PR that Q6 is still open.
+6. **CLI:**
+   - `rebase-agent decide`: one PR, prints the `FinalDecision` plus cost.
+   - `rebase-agent setup`: computes the merged summary once and writes JSON.
+7. **Scenario tests** (`@pytest.mark.llm`, real LLM, never mocked):
+   - policy scenarios → escalate, with the rule named
+   - trivial and real_conflict → auto_rebase
+   - semantic_break → record the orchestrator's decision as a note, not pass/fail (Q3)
+8. **Wrap-up:** update this file and DECISIONS.md, open the Phase 2 PR (what works, what doesn't, exact commands, total LLM spend), then **stop for review**.
+
+### 5. Coming later
+- **Phase 4 needs `RebaseSandbox` access.** Try `add_repo` first; if that fails, stop and ask the user to switch the session's repo.
+- **Q2b** (a GitHub App token for authoring sandbox PRs) and **Q5** (per-scenario base branches) need confirming at the start of Phase 4.
 
 ---
 
@@ -518,6 +575,7 @@ Never cut: policy tests, the verifier, or honest PR notes.
 5. **Cut scope, not quality.** One MCP server, one skill, a small model sweep, range-diff only for stale approvals.
 6. Local CLI first. The whole pipeline must work against a local clone before Phase 4.
 7. Only the sandbox repo, never a real work repo. Never use `GITHUB_TOKEN` for pushes.
+8. No attribution lines (`Co-Authored-By`, `Claude-Session`, "Generated with…") in commits or PR descriptions.
 
 ---
 
