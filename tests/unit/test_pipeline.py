@@ -4,6 +4,7 @@ this checks call counts and wiring only. Real-LLM behavior is in tests/scenarios
 from pathlib import Path
 
 from rebase_agent import analysts, orchestrator, pipeline
+from rebase_agent.ledger import Ledger, read_rows
 from rebase_agent.models import Decision, PRSummary, Usage
 
 SUMMARY = PRSummary(intent="x", touched_areas=[], behavior_changes=[], risk_notes=[])
@@ -36,3 +37,22 @@ def test_merged_summary_computed_once_per_run(scenario_repos, monkeypatch):
         Path(refs.repo), refs.base, refs.main, prs, ledger=None, merged_summary=SUMMARY
     )
     assert calls.count("analyst_merged") == 0
+
+
+def test_run_pr_cost_counts_only_this_call(tmp_path):
+    from rebase_agent.pipeline import _cost
+
+    ledger = Ledger(tmp_path / "run", scenario="s1")
+    u = Usage(input_tokens=1_000_000, output_tokens=0)
+    haiku = "claude-haiku-4-5-20251001"
+    ledger.record(stage="analyst_merged", model=haiku, usage=u, latency_s=0)  # shared, $1
+    Ledger(tmp_path / "run", scenario="s2").record(
+        stage="analyst_merged", model=haiku, usage=u, latency_s=0
+    )  # other scenario's merged summary: excluded
+    ledger.record(stage="analyst_pr", model=haiku, usage=u, latency_s=0, pr="pr/x")  # earlier run
+    first = len(read_rows(ledger.run_dir))
+    ledger.record(stage="analyst_pr", model=haiku, usage=u, latency_s=0, pr="pr/x")
+    ledger.record(stage="analyst_pr", model=haiku, usage=u, latency_s=0, pr="pr/y")
+    cost = _cost(ledger, "pr/x", first)
+    assert cost.per_stage_usd == {"analyst_merged": 1.0, "analyst_pr": 1.0}
+    assert cost.total_usd == 2.0

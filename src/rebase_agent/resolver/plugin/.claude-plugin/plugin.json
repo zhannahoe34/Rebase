@@ -1,0 +1,5 @@
+{
+  "name": "rebase",
+  "version": "0.1.0",
+  "description": "Rebase resolver playbook (loaded by rebase_agent.resolver)."
+}

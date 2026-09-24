@@ -4,8 +4,9 @@
 
 - **Status:**
   - Phase 1 done ([zhannahoe34/Rebase#2](https://github.com/zhannahoe34/Rebase/pull/2)). Generator `--push` mode is deferred to Phase 4.
-  - Phase 2 done, **waiting on review** (its PR is stacked on #2). All acceptance tests pass with the real LLM. Total LLM spend while building it was about $0.14.
-- **Next:** Phase 3 (review gate), after Phase 2 review.
+  - Phase 2 done ([#3](https://github.com/zhannahoe34/Rebase/pull/3), landed on `main` via [#4](https://github.com/zhannahoe34/Rebase/pull/4)).
+  - Phase 3 done, **waiting on review**. All acceptance tests pass with the real LLM and the real Agent SDK. LLM spend while building it was about $0.43.
+- **Next:** Phase 4 (GitHub Actions wiring), after Phase 3 review.
 - **Deadline:** demo on Mon Sept 28, 4 PM. The plan was written Thu Sept 24.
 
 ---
@@ -13,50 +14,54 @@
 ## Handoff: start of the next session
 
 ### 1. Get the code
-- Branch from `main` if the Phase 1 and Phase 2 PRs are merged. Otherwise branch from the Phase 2 branch (`claude/serene-volta-qf6ed8`), which contains Phase 1.
-- Create a new branch for Phase 3; that's one PR per phase.
+- `main` is the default branch (switched 2026-09-24). Branch from `main` once the Phase 3 PR is merged; otherwise branch from the Phase 3 branch (`claude/serene-volta-qf6ed8`).
+- One PR per phase. **Open it against `main`, and re-check the base right before opening** (Phase 2 was once merged into a stale branch by mistake).
 
 ### 2. Set up and check the key (don't skip)
 ```bash
 uv sync
 make generate      # baml_client is gitignored; nothing imports until this runs
 make baml-smoke    # must be 5 passed, 0 skipped: the live call proves REBASE_ANTHROPIC_API_KEY works
-make test && make lint   # includes the real-LLM Phase 2 scenario tests (~$0.06 per run)
+make lint
+make test          # 274 tests incl. real-LLM Phase 2+3 scenarios (~$0.19 per run)
 make sandbox       # builds .sandbox/<scenario> local repos
 ```
-If the live call is skipped or fails, stop and tell the user before doing any Phase 3 work.
+If the live call is skipped or fails, stop and tell the user before doing any Phase 4 work.
 
 ### 3. Things already learned (don't re-discover them)
 - **The LLM key is `REBASE_ANTHROPIC_API_KEY`**, not `ANTHROPIC_API_KEY`.
   - `clients.baml` reads `env.REBASE_ANTHROPIC_API_KEY`.
-  - Runtime `ClientRegistry` clients get it as `options["api_key"]`. They don't read env on their own.
-  - The Agent SDK in Phase 3 will need it passed explicitly too, e.g. `env={"ANTHROPIC_API_KEY": ...}` in its options. Check the 0.2.159 API.
-- **LLM transport (Q13, decided: option 1).** Never call `b.Fn(...)` directly: BAML's Rust HTTP client rejects the cloud sandbox's egress CA. Use `rebase_agent.llm.call("Fn", args, model=, stage=, ledger=, pr=)`.
-  - It builds the request with `b.request.Fn`, sends it with `httpx` (which honors `SSL_CERT_FILE`), and parses with `b.parse.Fn`.
-  - Usage comes from the response's `usage` block, not the BAML `Collector`.
-  - It writes the ledger row before parsing, so a failed parse is still costed.
-  - It raises on `stop_reason` other than `end_turn`/`stop_sequence`.
-  - It joins only `text` blocks, so thinking blocks from Sonnet 5 / Opus 5.5 are skipped.
-- **The Agent SDK (Phase 3) may hit the same TLS problem**, since it runs the Claude Code CLI (Node). Node honors `NODE_EXTRA_CA_CERTS`, which is set here, so it will probably work. Check it first thing.
-- **BAML 0.226.2 syntax:**
-  - Enum values must start with an uppercase letter. Use a literal union (`action "auto_rebase" | "escalate"`) for lowercase strings.
-  - `b.with_options(client_registry=...)` gives `.request.Fn` and `.parse.Fn`.
-- **Ruff 0.16:**
-  - It enforces `PLW1510` (every `subprocess.run` needs an explicit `check=`).
-  - It enforces `ISC004` (parenthesize implicit string concatenation inside a list).
-  - It formats Python blocks inside Markdown, so `docs/` is excluded.
-- **Where scenario PR title, body and expected outcome live:** `sandbox_gen.scenarios.SCENARIOS[name]` (`.merged`, `.pr`, `.expected`). They're also in the commit messages, which `git_ops.commit_message()` reads. In the local repos: tag `base` = main before the push, `main` = after, and `pr/<name>` = the PR.
-- **Phase 2 API (for Phase 3 to build on):**
-  - `pipeline.summarize_merged(repo, base, merged, ledger=)` → `PRSummary`
-  - `pipeline.decide_pr(repo, base, merged, pr_branch, merged_summary, ledger=)` → `FinalDecision`
-  - `pipeline.decide_all(...)` computes the merged summary at most once.
-  - `policy.apply_policy` / `policy.combine`
-  - `ledger.Ledger(run_dir, scenario=)`, `.record(...)`; `ledger.rollup` / `ledger.read_rows`
-  - Prices are in `config.PRICES`, with their source and date.
+  - Runtime `ClientRegistry` clients get it as `options["api_key"]`.
+  - The Agent SDK gets it as `env={"ANTHROPIC_API_KEY": ...}` in `ClaudeAgentOptions`. The SDK's init message confirms it with `apiKeySource=ANTHROPIC_API_KEY`.
+- **LLM transport (Q13, option 1).** Never call `b.Fn(...)` directly: BAML's Rust HTTP client rejects the cloud sandbox's egress CA. Use `rebase_agent.llm.call("Fn", args, model=, stage=, ledger=, pr=)`.
+  - It builds the request with `b.request.Fn`, sends it with `httpx`, and parses with `b.parse.Fn`.
+  - It writes the ledger row before parsing, and raises on a bad `stop_reason`.
+- **Agent SDK 0.2.159 (checked in Phase 3):**
+  - It reaches the API from this sandbox (the Node CLI honors `NODE_EXTRA_CA_CERTS`).
+  - `tools=[...]` is the built-in allowlist. `tools=[]` also removes `Skill`, so the resolver uses `tools=["Skill"]`.
+  - Skills load from a local plugin: `plugins=[{"type": "local", "path": ...}]` plus `skills=["<plugin>:<skill>"]`. The resolver's plugin is `src/rebase_agent/resolver/plugin/` (manifest in `.claude-plugin/plugin.json`, skill in `skills/rebase-playbook/SKILL.md`).
+  - `setting_sources=[]` ignores this machine's settings. The init message still *lists* the machine's own skills, but the `skills` filter hides them from the model.
+  - In-process tools: `@tool` + `create_sdk_mcp_server`, named `mcp__<server>__<tool>`. The stdio server goes in `mcp_servers` as `{"type": "stdio", "command": ..., "args": [...]}`.
+  - Caps: `max_turns` and `max_budget_usd`. Results come back with subtype `error_max_turns` / `error_max_budget_usd`, and `query()` may raise `ResultError` after yielding the `ResultMessage`, so keep the message.
+  - Cost: `ResultMessage.total_cost_usd` plus `model_usage[model].costUSD`. Mid-stream `AssistantMessage.usage` output counts are partial, so don't sum them.
+  - **Claude Code writes 1-hour cache entries.** Price them at `cache_write_1h`. The TTL split is in `ResultMessage.usage["cache_creation"]`. With that, the recomputed cost matches the SDK's exactly.
+- **mcp 2.2.0:**
+  - `FastMCP` is now `mcp.server.mcpserver.MCPServer`.
+  - The in-process client is `mcp.client.Client(server)`; stdio is `Client(StdioServerParameters(...))`.
+  - A tool returning bare `dict` gives no structured content. Return a pydantic model; lists come back wrapped as `{"result": [...]}`.
+- **BAML 0.226.2 syntax:** enum values must be capitalized, so use a literal union for lowercase strings. `b.with_options(client_registry=...)` gives `.request.Fn` / `.parse.Fn`.
+- **Ruff 0.16:** enforces `PLW1510` (explicit `check=`), `ISC004` (parenthesize implicit concatenation in lists) and `PLW1508` (env defaults must be `str`). `docs/` is excluded.
+- **Scenarios:** `sandbox_gen.scenarios.SCENARIOS[name]`. In the local repos: tag `base` = main before the push, `main` = after, `pr/<name>` = the PR.
+- **Phase 3 API (for Phase 4 to build on):**
+  - `pipeline.run_pr(repo, base, merged, pr_branch, merged_summary, ledger=, force_resolve=, push=False)` → `RunOutcome`. It never raises; errors become `final="error"`. `push=True` raises `NotImplementedError` until Phase 4.
+  - `resolver.agent.prepare_workdir(repo, onto, head)` → `(workdir, onto_sha, head_sha)`. The clone has **no remote**, so Phase 4's push must add one outside the agent.
+  - `report.render(outcome)` → comment markdown.
+  - CLI: `rebase-agent run-pr --repo --pr-branch --base [--merged-summary] [--force-resolve] [--run-dir]` writes `outcome-*.json` and `.md` next to the ledger.
+  - `REBASE_KEEP_WORKDIR=1` keeps the temp clone for debugging.
 - **Git conventions (user preference):** no `Co-Authored-By`, `Claude-Session` or other attribution lines in commits or PR descriptions.
 
-### 4. Phase 3 checklist
-See the Phase 3 section. Start with the riskiest unknown: Agent SDK 0.2.159 tool scoping, skills loading and reported cost, **and whether it can reach the API from this sandbox.** The resolver's ledger rows use `cost_source="sdk_reported"`, and we also recompute from tokens and log any difference (§0.6).
+### 4. Phase 4 checklist
+See the Phase 4 section. First confirm Q2b and Q5, and get `RebaseSandbox` access (below).
 
 ### 5. Coming later
 - **Phase 4 needs `RebaseSandbox` access.** Try `add_repo` first; if that fails, stop and ask the user to switch the session's repo.
@@ -73,7 +78,7 @@ These are the latest PyPI releases as of 2026-09-24. Exact pins go in `pyproject
 | Package | Pin | Used for |
 |---|---|---|
 | `baml-py` | `==0.226.2` | Analysts, orchestrator, verifier intent check. The `generators.baml` block uses `version "0.226.2"`, which must match. |
-| `claude-agent-sdk` | `==0.2.159` | Resolver agent loop |
+| `claude-agent-sdk` | `==0.2.159` | Resolver agent loop (bundles Claude Code CLI 2.1.281) |
 | `mcp` | `==2.2.0` | Our stdio MCP server and the resolver's MCP client config |
 | `pydantic` | `==2.13.5` | Internal types. The generated `baml_client` also needs it, but `baml-py` doesn't install it (found in the Phase 1 smoke test). |
 | `typing-extensions` | `==4.16.0` | Imported by the generated `baml_client`; not installed by `baml-py` either |
@@ -147,7 +152,7 @@ src/sandbox_gen/         # under src/ so uv_build packages it next to rebase_age
   template/              # tiny Python pkg + pytest suite + migrations/ + uv.lock + workflow yml
   assets/                # scenario-specific files (e.g. the bumped uv.lock)
   scenarios/{base,trivial,real_conflict,semantic_break,migration_collision,lockfile_touch}.py
-skills/rebase-playbook/SKILL.md
+src/rebase_agent/resolver/plugin/skills/rebase-playbook/SKILL.md   (plugin dir; see D21)
 eval/
   run_eval.py
   results/               # dated markdown tables
@@ -398,7 +403,7 @@ Every dollar is recorded, so the demo can quote real numbers.
 - `symbol_overlap(repo_path, base, a, b) -> list[str]`, which reuses `signals/symbols.py`.
 - Every path is validated to be inside the resolver's workdir.
 
-**Skill** (`skills/rebase-playbook/SKILL.md`, under ~60 lines):
+**Skill** (`src/rebase_agent/resolver/plugin/skills/rebase-playbook/SKILL.md`, under ~60 lines; D21):
 - Preview the conflicts first (`conflict_preview`).
 - Resolve only conflict hunks, and keep both sides' intent.
 - Never change code outside conflicted hunks.
