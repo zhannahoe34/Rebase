@@ -5,6 +5,7 @@ description = "Agentic auto-rebase for approved PRs"
 requires-python = ">=3.12"
 dependencies = [
     "baml-py==0.226.2",
+    "httpx==0.28.1",
     "pydantic==2.13.5",
     "typer==0.27.2",
     "typing-extensions==4.16.0",
@@ -22,7 +23,7 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["llm: calls a real LLM; needs ANTHROPIC_API_KEY (skipped and reported as not run without it)"]
+markers = ["llm: calls a real LLM; needs REBASE_ANTHROPIC_API_KEY (skipped and reported as not run without it)"]
 
 [tool.ruff]
 line-length = 100

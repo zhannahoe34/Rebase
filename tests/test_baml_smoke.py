@@ -2,7 +2,8 @@
 
 Covers: CLI version matches the pin, generation succeeds, the generated client
 imports, runtime model selection and usage collection exist, and the Anthropic
-request builds offline. The live call runs only with ANTHROPIC_API_KEY set.
+request builds offline. The live call (project transport, PLAN.md Q13) runs only with
+REBASE_ANTHROPIC_API_KEY set.
 """
 
 import os
@@ -46,26 +47,34 @@ def test_runtime_model_override_and_collector():
 
     registry = ClientRegistry()
     registry.add_llm_client(
-        name="Override", provider="anthropic", options={"model": "claude-sonnet-5"}
+        name="Override",
+        provider="anthropic",
+        options={"model": "claude-sonnet-5", "api_key": "test-key"},
     )
     registry.set_primary("Override")
     req = b.with_options(client_registry=registry, collector=Collector(name="smoke")).request.Smoke(
         "hi"
     )
     assert req.body.json()["model"] == "claude-sonnet-5"
+    assert req.headers["x-api-key"] == "test-key"
 
 
 @pytest.mark.llm
 @pytest.mark.skipif(
-    not os.environ.get("ANTHROPIC_API_KEY"), reason="ANTHROPIC_API_KEY not set: live call NOT RUN"
+    not os.environ.get("REBASE_ANTHROPIC_API_KEY"),
+    reason="REBASE_ANTHROPIC_API_KEY not set: live call NOT RUN",
 )
-def test_live_call():
-    from baml_py import Collector
+def test_live_call(tmp_path):
+    """Live call through the project transport (BAML request -> httpx -> BAML parse, Q13)."""
+    from rebase_agent import llm
+    from rebase_agent.ledger import Ledger, read_rows
 
-    from rebase_agent.baml_client import b
-
-    collector = Collector(name="smoke")
-    result = b.with_options(collector=collector).Smoke("hello")
+    ledger = Ledger(tmp_path / "smoke-run")
+    result, usage = llm.call(
+        "Smoke", {"text": "hello"}, model="claude-haiku-4-5-20251001", stage="smoke", ledger=ledger
+    )
     assert result.ok is True
     assert result.echo == "hello"
-    assert collector.last is not None and collector.last.usage.input_tokens > 0
+    assert usage.input_tokens > 0
+    (row,) = read_rows(ledger.run_dir)
+    assert row.cost_usd > 0

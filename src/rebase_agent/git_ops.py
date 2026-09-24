@@ -48,3 +48,14 @@ def show_file(repo: Path, rev: str, path: str) -> str | None:
 
 def unified_diff(repo: Path, old: str, new: str, path: str) -> str:
     return git(repo, "diff", "-U0", "--no-renames", old, new, "--", path).stdout
+
+
+def full_diff(repo: Path, old: str, new: str) -> str:
+    return git(repo, "diff", "--no-renames", old, new).stdout
+
+
+def commit_message(repo: Path, rev: str) -> tuple[str, str]:
+    """(subject, body) of one commit."""
+    out = git(repo, "log", "-1", "--format=%s%x00%b", rev).stdout
+    subject, _, body = out.partition("\x00")
+    return subject.strip(), body.strip()
