@@ -25,7 +25,7 @@ This is an interview demo (deadline **Mon Sept 28, 4 PM**). It must visibly show
 ## D2 — Repos and credentials (Decided)
 - `Rebase` (this repo) holds the system.
 - `RebaseSandbox` is a separate GitHub repo. Our sandbox generator fills it with seeded scenarios. Never test against a real work repo.
-- `ANTHROPIC_API_KEY` is the LLM key.
+- `REBASE_ANTHROPIC_API_KEY` is the LLM key (renamed from `ANTHROPIC_API_KEY` on 2026-09-24).
 - `SANDBOX_REPO_TOKEN` is a PAT or GitHub App token with contents and pull-request write on the sandbox repo.
 - Never use the default `GITHUB_TOKEN` for pushes, because its pushes don't retrigger CI.
 
@@ -142,3 +142,4 @@ The whole pipeline must work as a CLI against a local clone before Phase 4.
 ## Changelog
 - 2026-09-24: Initial version from the kickoff brief.
 - 2026-09-24: D18 added from the user's answers to the open questions.
+- 2026-09-24: LLM key renamed to `REBASE_ANTHROPIC_API_KEY`; BAML transport blocker recorded as PLAN.md Q13.

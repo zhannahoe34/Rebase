@@ -13,5 +13,5 @@ jobs:
       - run: uv run baml-cli generate
       - run: uv run ruff check .
       - run: uv run ruff format --check .
-      # LLM tests skip without ANTHROPIC_API_KEY and show as SKIPPED (not run), never as passed.
+      # LLM tests skip without REBASE_ANTHROPIC_API_KEY and show as SKIPPED (not run), never as passed.
       - run: uv run pytest -rs

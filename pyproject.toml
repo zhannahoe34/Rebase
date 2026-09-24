@@ -22,7 +22,7 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["llm: calls a real LLM; needs ANTHROPIC_API_KEY (skipped and reported as not run without it)"]
+markers = ["llm: calls a real LLM; needs REBASE_ANTHROPIC_API_KEY (skipped and reported as not run without it)"]
 
 [tool.ruff]
 line-length = 100

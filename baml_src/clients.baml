@@ -5,7 +5,7 @@ client<llm> Haiku {
   provider anthropic
   options {
     model "claude-haiku-4-5-20251001"
-    api_key env.ANTHROPIC_API_KEY
+    api_key env.REBASE_ANTHROPIC_API_KEY
   }
 }
 
@@ -13,7 +13,7 @@ client<llm> Sonnet {
   provider anthropic
   options {
     model "claude-sonnet-5"
-    api_key env.ANTHROPIC_API_KEY
+    api_key env.REBASE_ANTHROPIC_API_KEY
   }
 }
 
@@ -21,6 +21,6 @@ client<llm> Opus {
   provider anthropic
   options {
     model "claude-opus-5-5"
-    api_key env.ANTHROPIC_API_KEY
+    api_key env.REBASE_ANTHROPIC_API_KEY
   }
 }

@@ -3,7 +3,7 @@
 > **Read first in every session:** this file and `docs/DECISIONS.md`. Don't re-explore the repo. Update both files when a decision changes.
 
 - **Status:** Phase 1 done ([zhannahoe34/Rebase#2](https://github.com/zhannahoe34/Rebase/pull/2)), except two items:
-  - The live BAML call hasn't run yet (no `ANTHROPIC_API_KEY` in that session).
+  - The live BAML call **fails** in the cloud session (2026-09-24): BAML's built-in HTTP client rejects the sandbox egress TLS certificate (`InvalidCertificate(UnknownIssuer)`), whatever `SSL_CERT_FILE`/`SSL_CERT_DIR` say. The key itself works: the same request built with `b.request.Smoke`, sent with `httpx` and parsed with `b.parse.Smoke` returns 200 and parses. **Phase 2 is blocked on choosing a transport** (see Q13).
   - Generator `--push` mode is deferred to Phase 4.
 - **Next:** Phase 2 (review gate).
 - **Deadline:** demo on Mon Sept 28, 4 PM. The plan was written Thu Sept 24.
@@ -22,7 +22,7 @@ Either way, create a new branch for Phase 2; that's one PR per phase.
 ```bash
 uv sync
 make generate      # baml_client is gitignored; nothing imports until this runs
-make baml-smoke    # must be 5 passed, 0 skipped: the live call proves ANTHROPIC_API_KEY works
+make baml-smoke    # must be 5 passed, 0 skipped: the live call proves REBASE_ANTHROPIC_API_KEY works
 make test && make lint
 make sandbox       # builds .sandbox/<scenario> local repos
 ```
@@ -95,7 +95,7 @@ We don't need an AST library: the sandbox code is Python, so symbol extraction u
 
 | Var | Where | Default | Notes |
 |---|---|---|---|
-| `ANTHROPIC_API_KEY` | local and Actions secret | — | Needed for all LLM calls |
+| `REBASE_ANTHROPIC_API_KEY` | local and Actions secret | — | Needed for all LLM calls. Renamed from `ANTHROPIC_API_KEY` (user, 2026-09-24). `clients.baml` reads it via `env.REBASE_ANTHROPIC_API_KEY`; `ClientRegistry` clients must pass it as `options["api_key"]` explicitly. |
 | `SANDBOX_REPO_TOKEN` | local and Actions secret | — | PAT or App token with contents and PR write on the sandbox. Needs `workflow` scope if the generator pushes `.github/workflows/*`. **Never `GITHUB_TOKEN`.** |
 | `SANDBOX_REPO` | local and Actions var | `zhannahoe34/RebaseSandbox` (see Q1) | `owner/name` |
 | `REBASE_MODEL_ANALYST` | env or config | `claude-haiku-4-5-20251001` | |
@@ -610,4 +610,9 @@ Never cut: policy tests, the verifier, or honest PR notes.
   *Proposal:* option 1, else option 3.
 - **Q6 — Confidence floor**, see above.
 - **Q11 — Which "config" files force escalation?** The brief names migrations, auth, lockfiles and CI as hard rules. *Proposal:* "config" files are a signal only, not a forced escalation, unless you list specific paths.
+- **Q13 — BAML transport in the cloud session.** BAML 0.226.2's Rust HTTP client doesn't trust the egress CA, so `b.Fn(...)` can't reach Anthropic here (the Actions runner is unaffected). Options:
+  1. Keep BAML for prompts and parsing, and send the HTTP call ourselves: `b.request.Fn(...)` → `httpx` → `b.parse.Fn(...)`. Tokens come from the response's `usage` block instead of the `Collector`. Works in the cloud session and on Actions.
+  2. Keep `b.Fn(...)` and run LLM tests only locally or on Actions, not in cloud sessions.
+
+  *Proposal:* option 1.
 - **Q12 — Auth paths.** *Proposal:* `**/auth/**` and `**/*auth*.py` (as implemented in Phase 1). Any others?
