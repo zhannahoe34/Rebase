@@ -2,10 +2,10 @@
 
 > **Read first in every session:** this file and `docs/DECISIONS.md`. Don't re-explore the repo. Update both files when a decision changes.
 
-- **Status:** Phase 1 done ([zhannahoe34/Rebase#2](https://github.com/zhannahoe34/Rebase/pull/2)), except two items:
-  - The live BAML call **fails** in the cloud session (2026-09-24): BAML's built-in HTTP client rejects the sandbox egress TLS certificate (`InvalidCertificate(UnknownIssuer)`), whatever `SSL_CERT_FILE`/`SSL_CERT_DIR` say. The key itself works: the same request built with `b.request.Smoke`, sent with `httpx` and parsed with `b.parse.Smoke` returns 200 and parses. **Phase 2 is blocked on choosing a transport** (see Q13).
-  - Generator `--push` mode is deferred to Phase 4.
-- **Next:** Phase 2 (review gate).
+- **Status:**
+  - Phase 1 done ([zhannahoe34/Rebase#2](https://github.com/zhannahoe34/Rebase/pull/2)). Generator `--push` mode is deferred to Phase 4.
+  - Phase 2 done, **waiting on review** (its PR is stacked on #2). All acceptance tests pass with the real LLM. Total LLM spend while building it was about $0.14.
+- **Next:** Phase 3 (review gate), after Phase 2 review.
 - **Deadline:** demo on Mon Sept 28, 4 PM. The plan was written Thu Sept 24.
 
 ---
@@ -13,52 +13,50 @@
 ## Handoff: start of the next session
 
 ### 1. Get the code
-- If PR #2 is merged, branch from `main`.
-- If PR #2 is still open, branch from `claude/agentic-rebase-plan-tpyyi7`, which has all of Phase 1.
-
-Either way, create a new branch for Phase 2; that's one PR per phase.
+- Branch from `main` if the Phase 1 and Phase 2 PRs are merged. Otherwise branch from the Phase 2 branch (`claude/serene-volta-qf6ed8`), which contains Phase 1.
+- Create a new branch for Phase 3; that's one PR per phase.
 
 ### 2. Set up and check the key (don't skip)
 ```bash
 uv sync
 make generate      # baml_client is gitignored; nothing imports until this runs
 make baml-smoke    # must be 5 passed, 0 skipped: the live call proves REBASE_ANTHROPIC_API_KEY works
-make test && make lint
+make test && make lint   # includes the real-LLM Phase 2 scenario tests (~$0.06 per run)
 make sandbox       # builds .sandbox/<scenario> local repos
 ```
-If the live call is skipped or fails, stop and tell the user before doing any Phase 2 work: every Phase 2 acceptance test needs a real LLM.
+If the live call is skipped or fails, stop and tell the user before doing any Phase 3 work.
 
 ### 3. Things already learned (don't re-discover them)
-- **BAML 0.226.2 API** (checked in Phase 1):
-  - `ClientRegistry().add_llm_client(name=, provider="anthropic", options={"model": ...})`, then `.set_primary(name)`.
-  - Call with `b.with_options(client_registry=..., collector=Collector(name=...)).Fn(...)`.
-  - The collector exposes `.last` and `.usage`. `b.request.Fn(...)` builds the HTTP request offline.
-  - The generated client needs `pydantic` and `typing-extensions`, both pinned.
+- **The LLM key is `REBASE_ANTHROPIC_API_KEY`**, not `ANTHROPIC_API_KEY`.
+  - `clients.baml` reads `env.REBASE_ANTHROPIC_API_KEY`.
+  - Runtime `ClientRegistry` clients get it as `options["api_key"]`. They don't read env on their own.
+  - The Agent SDK in Phase 3 will need it passed explicitly too, e.g. `env={"ANTHROPIC_API_KEY": ...}` in its options. Check the 0.2.159 API.
+- **LLM transport (Q13, decided: option 1).** Never call `b.Fn(...)` directly: BAML's Rust HTTP client rejects the cloud sandbox's egress CA. Use `rebase_agent.llm.call("Fn", args, model=, stage=, ledger=, pr=)`.
+  - It builds the request with `b.request.Fn`, sends it with `httpx` (which honors `SSL_CERT_FILE`), and parses with `b.parse.Fn`.
+  - Usage comes from the response's `usage` block, not the BAML `Collector`.
+  - It writes the ledger row before parsing, so a failed parse is still costed.
+  - It raises on `stop_reason` other than `end_turn`/`stop_sequence`.
+  - It joins only `text` blocks, so thinking blocks from Sonnet 5 / Opus 5.5 are skipped.
+- **The Agent SDK (Phase 3) may hit the same TLS problem**, since it runs the Claude Code CLI (Node). Node honors `NODE_EXTRA_CA_CERTS`, which is set here, so it will probably work. Check it first thing.
+- **BAML 0.226.2 syntax:**
+  - Enum values must start with an uppercase letter. Use a literal union (`action "auto_rebase" | "escalate"`) for lowercase strings.
+  - `b.with_options(client_registry=...)` gives `.request.Fn` and `.parse.Fn`.
 - **Ruff 0.16:**
   - It enforces `PLW1510` (every `subprocess.run` needs an explicit `check=`).
-  - It formats Python blocks inside Markdown, so `docs/` is excluded in `pyproject.toml`.
-- **Where scenario PR title, body and expected outcome live:** `sandbox_gen.scenarios.SCENARIOS[name]` (`.merged`, `.pr`, `.expected`). They're also in the commit messages. In the local repos: tag `base` = main before the push, `main` = after, and `pr/<name>` = the PR.
-- **Signals:** `rebase_agent.signals.compute_signals(repo, base, merged, pr_head)`. Path classifiers are in `rebase_agent/config.py`; policy should reuse them, not duplicate them.
+  - It enforces `ISC004` (parenthesize implicit string concatenation inside a list).
+  - It formats Python blocks inside Markdown, so `docs/` is excluded.
+- **Where scenario PR title, body and expected outcome live:** `sandbox_gen.scenarios.SCENARIOS[name]` (`.merged`, `.pr`, `.expected`). They're also in the commit messages, which `git_ops.commit_message()` reads. In the local repos: tag `base` = main before the push, `main` = after, and `pr/<name>` = the PR.
+- **Phase 2 API (for Phase 3 to build on):**
+  - `pipeline.summarize_merged(repo, base, merged, ledger=)` → `PRSummary`
+  - `pipeline.decide_pr(repo, base, merged, pr_branch, merged_summary, ledger=)` → `FinalDecision`
+  - `pipeline.decide_all(...)` computes the merged summary at most once.
+  - `policy.apply_policy` / `policy.combine`
+  - `ledger.Ledger(run_dir, scenario=)`, `.record(...)`; `ledger.rollup` / `ledger.read_rows`
+  - Prices are in `config.PRICES`, with their source and date.
 - **Git conventions (user preference):** no `Co-Authored-By`, `Claude-Session` or other attribution lines in commits or PR descriptions.
 
-### 4. Phase 2 checklist (details in the Phase 2 section)
-1. **Price table:** get current per-model prices from Anthropic's published pricing (the `claude-api` skill or the docs). Store them in `config.py` with the source URL and date. Never guess.
-2. **Types:** add `PRSummary`, `Decision`, `PolicyResult`, `FinalDecision` and the ledger row types to `models.py`, following §0.4.
-3. **BAML functions:**
-   - `baml_src/analysts.baml`: `SummarizeChange`
-   - `baml_src/orchestrator.baml`: `DecideRebase`
-
-   Models come from env/config via `ClientRegistry`, never hardcoded (§0.2). Delete `smoke.baml` only if the smoke test moves onto a real function.
-4. **Cost ledger** (§0.6): one JSONL row per call, plus a `rebase-agent costs <run_dir>` command.
-5. **Policy:** `policy.py` with `apply_policy` and `combine`. Add a property test that policy escalation can never be overridden. Add the 0.7 confidence floor as a configurable setting, and say in the PR that Q6 is still open.
-6. **CLI:**
-   - `rebase-agent decide`: one PR, prints the `FinalDecision` plus cost.
-   - `rebase-agent setup`: computes the merged summary once and writes JSON.
-7. **Scenario tests** (`@pytest.mark.llm`, real LLM, never mocked):
-   - policy scenarios → escalate, with the rule named
-   - trivial and real_conflict → auto_rebase
-   - semantic_break → record the orchestrator's decision as a note, not pass/fail (Q3)
-8. **Wrap-up:** update this file and DECISIONS.md, open the Phase 2 PR (what works, what doesn't, exact commands, total LLM spend), then **stop for review**.
+### 4. Phase 3 checklist
+See the Phase 3 section. Start with the riskiest unknown: Agent SDK 0.2.159 tool scoping, skills loading and reported cost, **and whether it can reach the API from this sandbox.** The resolver's ledger rows use `cost_source="sdk_reported"`, and we also recompute from tokens and log any difference (§0.6).
 
 ### 5. Coming later
 - **Phase 4 needs `RebaseSandbox` access.** Try `add_repo` first; if that fails, stop and ask the user to switch the session's repo.
@@ -80,7 +78,7 @@ These are the latest PyPI releases as of 2026-09-24. Exact pins go in `pyproject
 | `pydantic` | `==2.13.5` | Internal types. The generated `baml_client` also needs it, but `baml-py` doesn't install it (found in the Phase 1 smoke test). |
 | `typing-extensions` | `==4.16.0` | Imported by the generated `baml_client`; not installed by `baml-py` either |
 | `typer` | `==0.27.2` | CLIs |
-| `httpx` | pinned in Phase 1 (latest) | GitHub REST (list PRs, comments) |
+| `httpx` | `==0.28.1` | LLM transport (Q13, since Phase 2) and GitHub REST (list PRs, comments) |
 | `pytest` | `==9.1.1` | Tests (dev) |
 | `ruff` | `==0.16.8` | Lint and format (dev) |
 
@@ -104,6 +102,7 @@ We don't need an AST library: the sandbox code is Python, so symbol extraction u
 | `REBASE_MODEL_VERIFIER` | env or config | `claude-sonnet-5` | |
 | `REBASE_RESOLVER_MAX_TURNS` | env or config | `20` | Q9 |
 | `REBASE_RESOLVER_MAX_USD` | env or config | `1.00` | Q9 |
+| `REBASE_CONFIDENCE_FLOOR` | env or config | `0.7` | Q6 (still open). An `auto_rebase` below it becomes `escalate`; `0` disables it. |
 
 Models are never hardcoded. The defaults above live only in `config.py` and can be overridden.
 
@@ -599,6 +598,7 @@ Never cut: policy tests, the verifier, or honest PR notes.
 - **Q8 — Generated `baml_client/`.** Gitignored, generated by `make generate` and CI (done).
 - **Q9 — Resolver caps.** 20 turns and $1.00 per PR (defaults, configurable).
 - **Q10 — Eval repetitions.** N=1 by default; N=3 for the orchestrator if time allows.
+- **Q13 — BAML transport in the cloud session** (2026-09-24). BAML 0.226.2's Rust HTTP client rejects the cloud sandbox's egress CA. **Decided: option 1.** BAML builds the request and parses the reply, and `httpx` sends it (`rebase_agent/llm.py`). Tokens come from the response's `usage` block.
 
 ## Open questions
 
@@ -610,9 +610,4 @@ Never cut: policy tests, the verifier, or honest PR notes.
   *Proposal:* option 1, else option 3.
 - **Q6 — Confidence floor**, see above.
 - **Q11 — Which "config" files force escalation?** The brief names migrations, auth, lockfiles and CI as hard rules. *Proposal:* "config" files are a signal only, not a forced escalation, unless you list specific paths.
-- **Q13 — BAML transport in the cloud session.** BAML 0.226.2's Rust HTTP client doesn't trust the egress CA, so `b.Fn(...)` can't reach Anthropic here (the Actions runner is unaffected). Options:
-  1. Keep BAML for prompts and parsing, and send the HTTP call ourselves: `b.request.Fn(...)` → `httpx` → `b.parse.Fn(...)`. Tokens come from the response's `usage` block instead of the `Collector`. Works in the cloud session and on Actions.
-  2. Keep `b.Fn(...)` and run LLM tests only locally or on Actions, not in cloud sessions.
-
-  *Proposal:* option 1.
 - **Q12 — Auth paths.** *Proposal:* `**/auth/**` and `**/*auth*.py` (as implemented in Phase 1). Any others?

@@ -139,7 +139,18 @@ The whole pipeline must work as a CLI against a local clone before Phase 4.
 - **Sandbox layout:** prefer per-scenario base branches over reusing `main` (to confirm in Phase 4).
 - **Settled defaults:** resolver caps of 20 turns and $1.00; eval N=1 (N=3 for the orchestrator if time allows); the generated BAML client is gitignored.
 
+## D19 — LLM transport (2026-09-24)
+BAML stays the definition of every single-shot call: prompts, types and output parsing. The HTTP call goes through our own `httpx` transport in `rebase_agent/llm.py`: `b.request.Fn` → `httpx` → `b.parse.Fn`.
+
+Why: BAML's built-in Rust client doesn't trust the cloud sandbox's egress CA, while `httpx` does. Token usage comes from the API response, and costs are estimated from `config.PRICES` (PLAN.md §0.6).
+
+## D20 — Phase 2 small additions (2026-09-24, proposed; confirm in review)
+- `PolicyResult.notes` lists categories that are reported but not forced (config, Q11).
+- `FinalDecision.escalated_by` says which check escalated: `policy`, `orchestrator` or `confidence_floor`. `FinalDecision.confidence_floor` records the floor that was used.
+- The orchestrator still runs when policy forces escalation, so its view is recorded in the comment and the eval. This costs about $0.008 per such PR.
+
 ## Changelog
 - 2026-09-24: Initial version from the kickoff brief.
 - 2026-09-24: D18 added from the user's answers to the open questions.
 - 2026-09-24: LLM key renamed to `REBASE_ANTHROPIC_API_KEY`; BAML transport blocker recorded as PLAN.md Q13.
+- 2026-09-24: D19 (transport, Q13 option 1) and D20 (Phase 2 additions) added.
