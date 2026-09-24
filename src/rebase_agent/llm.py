@@ -13,7 +13,7 @@ from baml_py import ClientRegistry
 
 from rebase_agent import config
 from rebase_agent.baml_client import b
-from rebase_agent.ledger import Ledger
+from rebase_agent.ledger import Ledger, split_cache_writes
 from rebase_agent.models import Usage
 
 _RETRY_STATUS = {408, 409, 429, 500, 502, 503, 504, 529}
@@ -58,11 +58,15 @@ def _post(url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, 
 
 def _usage(data: dict[str, Any]) -> Usage:
     u = data.get("usage") or {}
+    write_5m, write_1h = split_cache_writes(
+        u.get("cache_creation_input_tokens") or 0, u.get("cache_creation")
+    )
     return Usage(
         input_tokens=u.get("input_tokens", 0),
         output_tokens=u.get("output_tokens", 0),
         cache_read_tokens=u.get("cache_read_input_tokens") or 0,
-        cache_write_tokens=u.get("cache_creation_input_tokens") or 0,
+        cache_write_tokens=write_5m,
+        cache_write_1h_tokens=write_1h,
     )
 
 

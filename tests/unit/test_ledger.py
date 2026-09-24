@@ -3,17 +3,60 @@ from typer.testing import CliRunner
 
 from rebase_agent import llm
 from rebase_agent.cli import app
-from rebase_agent.ledger import Ledger, cost_usd, read_rows, rollup
+from rebase_agent.ledger import Ledger, cost_usd, read_rows, rollup, split_cache_writes
 from rebase_agent.models import Usage
+from rebase_agent.resolver.budget import usage_by_model
 
 
 def test_cost_uses_every_token_kind():
     usage = Usage(
-        input_tokens=1000, output_tokens=100, cache_read_tokens=500, cache_write_tokens=200
+        input_tokens=1000,
+        output_tokens=100,
+        cache_read_tokens=500,
+        cache_write_tokens=200,
+        cache_write_1h_tokens=300,
     )
     cost, rates = cost_usd("claude-sonnet-5", usage)
-    assert rates == {"input": 2.0, "output": 10.0, "cache_read": 0.2, "cache_write": 2.5}
-    assert cost == pytest.approx((1000 * 2 + 100 * 10 + 500 * 0.2 + 200 * 2.5) / 1e6)
+    assert rates == {
+        "input": 2.0,
+        "output": 10.0,
+        "cache_read": 0.2,
+        "cache_write": 2.5,
+        "cache_write_1h": 4.0,
+    }
+    assert cost == pytest.approx((1000 * 2 + 100 * 10 + 500 * 0.2 + 200 * 2.5 + 300 * 4) / 1e6)
+
+
+def test_split_cache_writes():
+    assert split_cache_writes(100, None) == (100, 0)
+    assert split_cache_writes(100, {"ephemeral_1h_input_tokens": 60}) == (40, 60)
+
+
+def test_sdk_reported_row_keeps_recomputed_cost(tmp_path):
+    """Matches a real Sonnet 5 resolver run: 1h cache writes reconcile to the SDK's cost."""
+    per_model = usage_by_model(
+        {
+            "claude-sonnet-5": {
+                "inputTokens": 16,
+                "outputTokens": 1178,
+                "cacheReadInputTokens": 35040,
+                "cacheCreationInputTokens": 6357,
+                "costUSD": 0.044248,
+            }
+        },
+        {"cache_creation": {"ephemeral_1h_input_tokens": 6357, "ephemeral_5m_input_tokens": 0}},
+    )
+    usage, reported = per_model["claude-sonnet-5"]
+    row = Ledger(tmp_path / "r").record(
+        stage="resolver",
+        model="claude-sonnet-5",
+        usage=usage,
+        latency_s=1,
+        reported_cost_usd=reported,
+    )
+    assert row.cost_source == "sdk_reported"
+    assert row.cost_usd == 0.044248
+    assert row.recomputed_cost_usd == pytest.approx(0.044248)
 
 
 def test_unknown_model_is_an_error_not_zero():

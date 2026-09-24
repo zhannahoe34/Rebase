@@ -3,11 +3,20 @@
 from collections import defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from rebase_agent import config
 from rebase_agent.models import LedgerRow, Usage
 
 LEDGER_NAME = "ledger.jsonl"
+
+
+def split_cache_writes(total: int, breakdown: dict[str, Any] | None) -> tuple[int, int]:
+    """(5-minute, 1-hour) cache-write tokens. Without a breakdown, all count as 5-minute."""
+    if not breakdown:
+        return total, 0
+    one_hour = breakdown.get("ephemeral_1h_input_tokens") or 0
+    return total - one_hour, one_hour
 
 
 def cost_usd(model: str, usage: Usage) -> tuple[float, dict[str, float]]:
@@ -20,12 +29,14 @@ def cost_usd(model: str, usage: Usage) -> tuple[float, dict[str, float]]:
         "output": price.output,
         "cache_read": price.cache_read,
         "cache_write": price.cache_write,
+        "cache_write_1h": price.cache_write_1h,
     }
     cost = (
         usage.input_tokens * price.input
         + usage.output_tokens * price.output
         + usage.cache_read_tokens * price.cache_read
         + usage.cache_write_tokens * price.cache_write
+        + usage.cache_write_1h_tokens * price.cache_write_1h
     ) / 1_000_000
     return cost, rates
 
@@ -41,9 +52,26 @@ class Ledger:
         self.scenario = scenario
 
     def record(
-        self, *, stage: str, model: str, usage: Usage, latency_s: float, pr: str | None = None
+        self,
+        *,
+        stage: str,
+        model: str,
+        usage: Usage,
+        latency_s: float,
+        pr: str | None = None,
+        reported_cost_usd: float | None = None,
     ) -> LedgerRow:
-        cost, rates = cost_usd(model, usage)
+        """Estimated cost by default. With reported_cost_usd (Agent SDK), that is the cost
+        and the token estimate is kept alongside it, so any difference is visible."""
+        if reported_cost_usd is None:
+            cost, rates = cost_usd(model, usage)
+            recomputed = None
+        else:
+            try:
+                recomputed, rates = cost_usd(model, usage)
+            except KeyError:
+                recomputed, rates = None, {}
+            cost = reported_cost_usd
         row = LedgerRow(
             run_id=self.run_id,
             pr=pr,
@@ -54,9 +82,11 @@ class Ledger:
             output_tokens=usage.output_tokens,
             cache_read_tokens=usage.cache_read_tokens,
             cache_write_tokens=usage.cache_write_tokens,
+            cache_write_1h_tokens=usage.cache_write_1h_tokens,
             usd_per_mtok=rates,
             cost_usd=cost,
-            cost_source="estimated",
+            cost_source="estimated" if reported_cost_usd is None else "sdk_reported",
+            recomputed_cost_usd=recomputed,
             latency_s=round(latency_s, 3),
             timestamp=datetime.now(UTC).isoformat(timespec="seconds"),
         )

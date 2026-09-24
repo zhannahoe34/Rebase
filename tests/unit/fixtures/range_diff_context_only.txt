@@ -1,0 +1,13 @@
+1:  0675f8d ! 1:  82df53f Reject empty item names in restock
+    @@ shop/inventory.py: def restock(stock: dict[str, int], item: str, qty: int) -> di
+              raise ValueError("qty must be positive")
+     +    if not item:
+     +        raise ValueError("item name required")
+    +     if qty > MAX_RESTOCK:
+    +         raise ValueError(f"qty must be at most {MAX_RESTOCK}")
+          stock[item] = stock.get(item, 0) + qty
+    -     return stock
+    - 
+     
+      ## tests/test_inventory_items.py (new) ##
+     @@

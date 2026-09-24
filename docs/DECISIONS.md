@@ -149,8 +149,30 @@ Why: BAML's built-in Rust client doesn't trust the cloud sandbox's egress CA, wh
 - `FinalDecision.escalated_by` says which check escalated: `policy`, `orchestrator` or `confidence_floor`. `FinalDecision.confidence_floor` records the floor that was used.
 - The orchestrator still runs when policy forces escalation, so its view is recorded in the comment and the eval. This costs about $0.008 per such PR.
 
+## D21 — Phase 3 choices (2026-09-24, proposed; confirm in review)
+- **Skill location:** `src/rebase_agent/resolver/plugin/skills/rebase-playbook/SKILL.md`, not repo-root `skills/`. The Agent SDK loads skills from a plugin dir, and keeping it inside the package ships it with the code.
+- **Resolver tool scoping is enforced in code, not just in the skill:**
+  - Paths must stay inside the workdir and outside `.git`.
+  - `write_file` and `git_add` accept only files git reports as conflicted.
+  - `git_add` refuses a file that still has conflict markers.
+  - `rebase_continue` refuses while files are unresolved.
+- **Resolver outcomes:**
+  - An `escalate(reason)` tool records a deliberate escalation.
+  - `resolved` is decided from repo state (the rebase finished and no conflicts remain), not from the agent's own words.
+  - A cap hit becomes `escalated` with the cap named. Any other failure becomes `error` with a reason.
+- **Resolver prompt:** a short custom system prompt instead of Claude Code's default, which is cheaper and keeps the loop focused.
+- **Additions to §0.4 types:**
+  - `ResolverResult.tool_calls` shows skill and MCP use in the comment.
+  - `StaleCheckResult.reasons`.
+  - `RunOutcome.pr_branch`, `.dry_run` and `.error`.
+  - `RunOutcome.signals`, `.merged_summary`, `.pr_summary` and `.decision` are optional, so an early error still yields an outcome.
+  - `Usage` and `LedgerRow` gain `cache_write_1h_tokens`; `LedgerRow` gains `recomputed_cost_usd`.
+- **Verifier:** the intent check runs even when the tests fail, so the comment has both. On `semantic_break` the tests catch the break; the intent check says "preserved", because the diff does what the PR says.
+- **Per-PR cost in `RunOutcome`:** the rows written during that `run_pr` call, plus the run's shared merged-summary cost shown in full. `rebase-agent costs` shows the per-PR share.
+
 ## Changelog
 - 2026-09-24: Initial version from the kickoff brief.
 - 2026-09-24: D18 added from the user's answers to the open questions.
 - 2026-09-24: LLM key renamed to `REBASE_ANTHROPIC_API_KEY`; BAML transport blocker recorded as PLAN.md Q13.
 - 2026-09-24: D19 (transport, Q13 option 1) and D20 (Phase 2 additions) added.
+- 2026-09-24: D21 (Phase 3 choices) added.
