@@ -63,3 +63,45 @@ def test_real_edited_patch_is_changed(scenario_repos):
     result = stale_check(workdir, base, head, onto, "HEAD")
     assert not result.unchanged
     assert any("# extra" in r for r in result.reasons)
+
+
+def test_small_commit_with_rewritten_context_is_paired(tmp_path):
+    """Seen live on the sandbox: two PRs appending to the same file and import line. With
+    range-diff's default creation factor the tiny commit went unpaired ("dropped" +
+    "added"); it must pair and name the changed line instead."""
+    import subprocess
+
+    def g(*a):
+        return subprocess.run(
+            ["git", "-C", str(tmp_path), *a], capture_output=True, text=True, check=True
+        ).stdout.strip()
+
+    g("init", "-q", "-b", "main")
+    g("config", "user.name", "t")
+    g("config", "user.email", "t@t")
+    (tmp_path / "m.py").write_text("from r import a\n\n\ndef x():\n    return 1\n")
+    g("add", "."), g("commit", "-qm", "base")
+    base = g("rev-parse", "HEAD")
+    g("checkout", "-qb", "pr")
+    (tmp_path / "m.py").write_text("from r import a, b\n\n\ndef x():\n    return 1\n")
+    g("commit", "-qam", "Use b")
+    old_head = g("rev-parse", "HEAD")
+    g("checkout", "-q", "main")
+    (tmp_path / "m.py").write_text("from r import a, c\n\n\ndef x():\n    return 2\n")
+    g("commit", "-qam", "Use c")
+    onto = g("rev-parse", "HEAD")
+    g("checkout", "-q", "pr")
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "rebase", "-q", onto], capture_output=True, check=False
+    )
+    (tmp_path / "m.py").write_text("from r import a, b, c\n\n\ndef x():\n    return 2\n")
+    g("add", "m.py")
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "-c", "core.editor=true", "rebase", "--continue"],
+        capture_output=True,
+        check=True,
+    )
+    result = stale_check(tmp_path, base, old_head, onto, "HEAD")
+    assert not result.unchanged
+    assert not any("dropped" in r or "added by the rebase" in r for r in result.reasons)
+    assert any("from r import a, b, c" in r for r in result.reasons)

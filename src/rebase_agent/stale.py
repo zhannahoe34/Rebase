@@ -58,6 +58,10 @@ def stale_check(
         Path(workdir),
         "range-diff",
         "--no-color",
+        # Default 60 leaves small commits unpaired when their context changed a lot
+        # (they show up as dropped + added). Pair as much as possible so the reasons
+        # name the actual changed lines.
+        "--creation-factor=100",
         f"{old_base}..{old_head}",
         f"{new_base}..{new_head}",
     ).stdout
