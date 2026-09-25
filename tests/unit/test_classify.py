@@ -18,6 +18,11 @@ from rebase_agent.signals.classify import categories
         ("shop/oauth_client.py", {"auth"}),
         ("shop/pricing.py", set()),
         ("docs/migrations.md", set()),
+        ("tests/test_auth_expiry.py", {"auth"}),  # a test named after auth counts (Q12)
+        ("shop/shipping.py", set()),
+        ("shop/tax.py", set()),
+        ("docs/CHANGELOG.md", set()),
+        ("README.md", set()),
     ],
 )
 def test_categories(path, expected):

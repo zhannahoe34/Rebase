@@ -85,3 +85,79 @@ def test_migration_numbers_collide_in_wave2(waves):
     touch = sig.touches["migration"]
     assert touch.merged == ["migrations/0003_add_coupons.sql"]
     assert touch.pr == ["migrations/0003_add_wishlist.sql"]
+
+
+def test_wave1_new_scenarios(waves):
+    repo, before, after = Path(waves.repo), waves.base, waves.waves[0]
+    s = {n: compute_signals(repo, before, after, waves.prs[n]) for n in SCENARIOS}
+    p = {n: apply_policy(sig) for n, sig in s.items()}
+
+    assert s["conflicting_intent"].conflict_count == 1
+    assert s["conflicting_intent"].symbol_overlap == ["shop/inventory.py:reserve"]
+    assert not p["conflicting_intent"].force_escalate  # only judgment can stop it
+
+    assert s["behavior_change"].conflict_count == 0 and s["behavior_change"].symbol_overlap == []
+    assert not p["behavior_change"].force_escalate
+    assert not rebased_tests_pass(waves, "behavior_change", after)  # verifier must catch it
+
+    assert s["multi_file_conflict"].conflict_count == 2
+    assert not p["multi_file_conflict"].force_escalate
+
+    assert p["auth_touch"].force_escalate
+    assert [r.split(":")[:2] for r in p["auth_touch"].rules_hit] == [["auth", "pr"]]
+    assert p["ci_touch"].force_escalate
+    assert [r.split(":")[:2] for r in p["ci_touch"].rules_hit] == [["ci", "pr"]]
+    assert rebased_tests_pass(waves, "auth_touch", after)  # would be safe: policy is the stop
+    assert rebased_tests_pass(waves, "ci_touch", after)
+
+    assert s["unapproved"].conflict_count == 0 and not p["unapproved"].force_escalate
+    assert rebased_tests_pass(waves, "unapproved", after)
+
+
+def test_prs_of_other_scenarios_are_unaffected_by_each_others_merged_changes(waves):
+    """Wave 1 merges every code scenario at once; each PR must see only its own conflicts."""
+    repo, before, after = Path(waves.repo), waves.base, waves.waves[0]
+    conflicts = {
+        n: compute_signals(repo, before, after, waves.prs[n]).conflict_count for n in SCENARIOS
+    }
+    assert {n: c for n, c in conflicts.items() if c} == {
+        "real_conflict": 1,
+        "conflicting_intent": 1,
+        "multi_file_conflict": 2,
+    }
+
+
+def _wave_of(name: str) -> int:
+    return next(i for i, (_, names) in enumerate(WAVES) if name in names)
+
+
+@pytest.mark.parametrize("name", list(SCENARIOS))
+def test_declared_outcome_agrees_with_computed_policy(name, waves):
+    """The Expected each scenario declares (and the PR body advertises) must match what the
+    deterministic half of the system computes for the wave its change lands in."""
+    s = SCENARIOS[name]
+    i = _wave_of(name)
+    before = waves.base if i == 0 else waves.waves[i - 1]
+    signals = compute_signals(Path(waves.repo), before, waves.waves[i], waves.prs[name])
+    policy = apply_policy(signals)
+
+    if s.expected.stage == "policy":
+        assert policy.force_escalate, name
+        assert s.expected.final == "escalated"
+    else:
+        assert not policy.force_escalate, name
+    assert (s.expected.final == "skipped") == (not s.approved), name
+    if s.expected.final == "skipped":
+        assert s.expected.stage == "eligibility"
+    if s.expected.final == "pushed":
+        assert s.expected.stage == "push"
+    if s.expected.also_stages:  # only LLM-dependent escalations have alternatives
+        assert s.expected.final == "escalated" and s.expected.stage != "policy"
+
+
+def test_every_scenario_pins_its_own_signals_and_a_distinct_purpose():
+    assert len({s.description for s in SCENARIOS.values()}) == len(SCENARIOS)
+    for name, s in SCENARIOS.items():
+        assert set(s.expected_signals) >= {
+            "conflict_count", "conflicted_files", "file_overlap", "symbol_overlap", "touches",
+        }, name  # fmt: skip

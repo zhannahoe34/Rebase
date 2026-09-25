@@ -10,6 +10,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -100,6 +101,16 @@ class GitHub:
         self._request(
             "POST", f"/repos/{self.repo}/issues/{number}/labels", json={"labels": [label]}
         )
+
+    def remove_label(self, number: int, label: str) -> None:
+        """No-op when the PR doesn't carry the label."""
+        try:
+            self._request(
+                "DELETE", f"/repos/{self.repo}/issues/{number}/labels/{quote(label, safe='')}"
+            )
+        except GitHubError as e:
+            if "HTTP 404" not in str(e):
+                raise
 
     def eligibility(self, pr: dict) -> tuple[bool, str]:
         """Eligible = the approval label, or an APPROVED review with no reviewer's latest

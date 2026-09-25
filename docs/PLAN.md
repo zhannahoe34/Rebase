@@ -4,70 +4,62 @@
 
 - **Status:**
   - Phases 1–3 done and on `main` ([#2](https://github.com/zhannahoe34/Rebase/pull/2), [#3](https://github.com/zhannahoe34/Rebase/pull/3) via [#4](https://github.com/zhannahoe34/Rebase/pull/4), [#5](https://github.com/zhannahoe34/Rebase/pull/5)).
-  - **Phase 4 in progress** on branch `claude/serene-volta-qf6ed8` (ahead of `main`), **no PR yet**. The code is done and unit-tested (284 pass, lint clean). The **live Actions run has not succeeded yet** (blocker below).
-  - Phase 4 LLM spend so far: about $0.13, all local dry runs. No run on GitHub has reached an LLM yet.
-- **Next:** unblock the live run, verify it end to end, then open the Phase 4 PR against `main`.
+  - **Phase 4 works live** on branch `claude/serene-volta-qf6ed8` (ahead of `main`), **no PR yet**. The workflow runs end to end on GitHub: one matrix leg per eligible PR, a comment on each, and the resolved PRs force-pushed with the sandbox `ci` re-running green (so the push does not use `GITHUB_TOKEN`).
+  - Verified across 3 replays of the original 5 scenarios (identical outcomes each time) and 1 replay of the expanded set of 11 scenarios (wave 1, then wave 2). Wave 1 of the expanded set cost about $0.22 in LLM spend across 10 PRs (per-PR comments), plus the once-per-run merged summary.
+  - 332 unit tests pass, lint clean. The 23 LLM scenario tests were **not run locally** (no `REBASE_ANTHROPIC_API_KEY` on this machine); the live runs are the evidence for those outcomes. The verifier's live catch is only exercised through `--force-resolve` locally, because on GitHub the orchestrator escalated `semantic_break` and `behavior_change` first.
+- **Next:** open the Phase 4 PR against `main`; then Phases 5–6.
 - **Deadline:** demo on Mon Sept 28, 4 PM.
 
 ---
 
-## Handoff: start of the next session (Phase 4, mid-flight)
+## Handoff: Phase 4 state
 
 ### 1. Where things are
-- **Code:** branch `claude/serene-volta-qf6ed8` (pushed). Keep working on it. Open the Phase 4 PR **against `main`**, and re-check the base right before opening.
-- **Sandbox repo `zhannahoe34/RebaseSandbox`** (public). This session attached it with `add_repo` (push access); a new session must attach it again. Its state:
-  - `main` is at **wave 1** (`6218be97`): the base commit plus the merged changes of trivial, real_conflict and semantic_break.
-  - **Open PRs, all → `main`, all labelled `rebase:approved`:** #15 lockfile_touch, #16 trivial, #17 real_conflict, #18 semantic_break, #19 migration_collision.
-  - Closed or merged PRs #1–#14 are from earlier layouts and the user's accidental merges. Ignore them.
-  - Five leftover `base/*` branches from the old per-scenario layout are unused. This session's git proxy can't delete branches (HTTP 403); the user can delete them in the UI.
-  - The user has set Actions secrets `REBASE_ANTHROPIC_API_KEY` and `SANDBOX_REPO_TOKEN` (fine-grained PAT: Contents, Pull requests and Workflows read/write), and a **repository variable** `REBASE_REF=claude/serene-volta-qf6ed8`.
+- **Code:** branch `claude/serene-volta-qf6ed8`. Open the Phase 4 PR **against `main`**, and re-check the base right before opening.
+- **Sandbox repo `zhannahoe34/RebaseSandbox`** (public). After the last replay, `main` is at **wave 2**. Open PRs #15–#25 all target `main`; #25 (`unapproved`) deliberately has no label. Closed or merged PRs #1–#14 are from earlier layouts; ignore them. Five leftover `base/*` branches from the old layout are unused and can be deleted in the UI.
+- **Actions settings on the sandbox** (checked with `gh variable list` / `gh secret list`):
+  - secrets: `REBASE_ANTHROPIC_API_KEY`, `SANDBOX_REPO_TOKEN` (fine-grained PAT: Contents, Pull requests and Workflows read/write);
+  - variable: `REBASE_REF=claude/serene-volta-qf6ed8`.
+  - Set `REBASE_REF` back to `main`, or delete it, after the Phase 4 PR merges.
 
-### 2. The blocker (start here)
-- Every rebase workflow run fails in the `setup` job's CLI step after about 12 s with **exit code 2**. Latest: run [36166602631](https://github.com/zhannahoe34/RebaseSandbox/actions/runs/36166602631).
-- **Diagnosis:** exit 2 is typer rejecting `--github-base`, meaning the workflow checked out Rebase **`main`** (Phase 3 code), not the Phase 4 branch. `${{ vars.REBASE_REF || 'main' }}` fell back to `main`. Reproduced locally: Rebase `main` gives exit 2, the Phase 4 branch accepts the arguments.
-- **History:**
-  - The user first created `REBASE_REF` as a *secret*, then switched it to a variable. Runs after the switch still exit 2.
-  - A re-run of an old run replays its old context, so after any settings change, test with a **fresh push** instead.
-- **Asked the user, no answer yet:** paste the second `actions/checkout@v4` step (shows `ref:`) and the tail of the failing step from that run's log, and double-check the variable's exact name and value.
-- **This session can't read Actions logs, variables or secrets.** The proxy blocks `/actions/variables`, `/actions/secrets` and the log download. It *can* read runs, jobs, steps and check-run annotations (exit codes) and can POST a re-run.
-- **Fallback if the variable keeps failing:** pin `REBASE_REF: claude/serene-volta-qf6ed8` directly in the template workflow for the test and put it back to `main` before merging. A template change gives every generated commit a new SHA, so GitHub auto-closes the open PRs on the next `generate --push`, and the generator opens fresh ones (see §4). Offered to the user, not yet decided.
-- **Fixed on the branch but not yet exercised on Actions (because of the blocker):** `setup` now creates `../out/`, which a fresh runner doesn't have (commit `a8a50cd`). Expect more first-run bugs in the `rebase` matrix job, which hasn't run once yet.
+### 2. What the earlier "blocker" was (resolved)
+- The setup job exited 2 because `REBASE_REF` did not exist as a variable, so the workflow checked out Rebase `main` (Phase 3 code, which rejects `--github-base`). `SANDBOX_REPO_TOKEN` had also been saved as a variable (readable in a public repo) instead of a secret. Both were settings mistakes, not code bugs; the PAT was rotated.
+- A re-run replays the old context. After changing settings, test with a fresh push.
 
 ### 3. How to run the live test
 ```bash
-export SANDBOX_REPO=zhannahoe34/RebaseSandbox SANDBOX_REPO_TOKEN="$GH_TOKEN"   # this session's GitHub creds; never store them
-R=https://github.com/zhannahoe34/rebasesandbox                                   # plain URL: the session git proxy adds auth
-uv run rebase-sandbox generate --push --remote $R    # reset: main=base, pr/<s> force-pushed, PRs retargeted/opened (labels kept)
-uv run rebase-sandbox trigger --wave 1 --remote $R   # "merge": fast-forward main by wave 1 -> fires the workflow
+export SANDBOX_REPO=zhannahoe34/RebaseSandbox SANDBOX_REPO_TOKEN="$(gh auth token)"
+R=https://github.com/zhannahoe34/rebasesandbox
+uv run rebase-sandbox generate --push --label-approved --remote $R   # reset: main=base, pr/<s> force-pushed, PRs retargeted/opened, approval label set (removed on unapproved scenarios)
+uv run rebase-sandbox trigger --wave 1 --remote $R                   # "merge": fast-forward main by wave 1 -> fires the workflow
+uv run rebase-sandbox trigger --wave 2 --remote $R                   # after wave 1's run has finished
 ```
-- `trigger --wave N` refuses unless remote `main` is at wave N-1, so reset first to replay.
-- Watch runs with the REST API (`/actions/runs?branch=main`, `/actions/runs/<id>/jobs`, `/check-runs/<job id>/annotations`). Use an `until ...; do sleep 15; done` loop; bare long `sleep` is blocked.
-- **Expected for wave 1 (pinned by `tests/unit/test_waves.py`):**
+- `trigger --wave N` refuses unless remote `main` is at wave N-1, so reset first to replay. Wait for a wave's run to finish before triggering the next.
+- On a machine without the session git proxy, the plain `--remote` URL needs credentials: pass `GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0= GIT_CONFIG_KEY_1=credential.helper GIT_CONFIG_VALUE_1='!gh auth git-credential'` in the environment, and `GIT_TERMINAL_PROMPT=0`.
+- With a local `gh` login you can read runs and logs directly: `gh run list -R $SANDBOX_REPO -w rebase`, `gh run view <id> --log-failed`.
+- **Expected outcomes** (pinned by `tests/unit/test_waves.py`, and declared per scenario in `sandbox_gen/scenarios/*.py`):
 
-| PR | Expected |
-|---|---|
-| #16 trivial | clean → pushed |
-| #17 real_conflict | resolver → pushed |
-| #18 semantic_break | escalated (orchestrator or verifier) |
-| #19 migration_collision | escalated at `policy` (PR adds a migration) |
-| #15 lockfile_touch | clean → pushed |
+| Wave | PR / scenario | Expected |
+|---|---|---|
+| 1 | trivial | clean → pushed |
+| 1 | real_conflict | resolver → pushed |
+| 1 | multi_file_conflict | resolver (2 files) → pushed |
+| 1 | semantic_break | escalated (orchestrator, or verifier if it gets that far) |
+| 1 | conflicting_intent | escalated, never pushed (orchestrator/resolver/verifier) |
+| 1 | behavior_change | escalated (orchestrator, or verifier) |
+| 1 | auth_touch | escalated at `policy` (PR touches `shop/auth/`) |
+| 1 | ci_touch | escalated at `policy` (PR edits the CI workflow) |
+| 1 | unapproved | not in the matrix, no comment |
+| 1 | lockfile_touch | clean → pushed (its own diff touches no lockfile; the lockfile change lands in wave 2) |
+| 1 | migration_collision | escalated at `policy` (the PR adds a migration) |
+| 2 | every eligible open PR | escalated at `policy` (the merged change adds a migration and bumps the lockfile) |
 
-- **Wave 2** (migration + lockfile bump): every open PR escalates at `policy`.
-- **Acceptance** (Phase 4 section):
-  - one workflow run with a matrix leg per eligible PR;
-  - a comment on every PR matching the table;
-  - #15/#16/#17 force-pushed, with their sandbox `ci` re-running green (proves the push didn't use `GITHUB_TOKEN`);
-  - the PR description links the run URLs.
-- **Then:**
-  - write the Phase 4 PR (what works, what doesn't, exact commands, LLM spend from the run artifacts' ledgers);
-  - update this file and DECISIONS;
-  - tell the user to set `REBASE_REF` back to `main`, or delete it, after merging;
-  - stop. Phase 4 isn't a review gate, but the user has been reviewing each phase.
+- **Acceptance** (Phase 4 section), all met in the live runs: one workflow run with a matrix leg per eligible PR; a comment on every eligible PR matching the table; resolved PRs force-pushed with sandbox `ci` re-running green; the PR description links the run URLs.
 
 ### 4. Phase 4 design (what's built)
 - **Sandbox layout (Q5, decided: D23):**
   - All PRs target `main`. Each scenario has `pr/<name>`, and every scenario shares one base commit.
-  - Scenario "merged changes" land on `main` in **waves** (`sandbox_gen.scenarios.WAVES`): wave 1 = code (trivial, real_conflict, semantic_break), wave 2 = risky (migration_collision, lockfile_touch). Risky changes get their own wave because policy escalates every PR whose merged change touches migrations or lockfiles.
+  - Scenario "merged changes" land on `main` in **waves** (`sandbox_gen.scenarios.WAVES`): wave 1 = code (trivial, real_conflict, semantic_break, conflicting_intent, behavior_change, multi_file_conflict, auth_touch, ci_touch, unapproved), wave 2 = risky (migration_collision, lockfile_touch). Risky changes get their own wave because policy escalates every PR whose merged change touches migrations or lockfiles.
   - **Merging the sandbox PRs themselves in the UI does not exercise the scenarios.** Only #15 and #16 overlap each other. The user did this once by accident.
 - **Eligibility (Q2b, decided: D23):** an APPROVED review (with no reviewer's latest review requesting changes) or the `rebase:approved` label. The label exists because this session acts as the user, and GitHub blocks self-approval.
 - **Workflow** (`src/sandbox_gen/template/.github/workflows/rebase.yml`, installed into the sandbox by the generator):
@@ -90,14 +82,14 @@ uv run rebase-sandbox trigger --wave 1 --remote $R   # "merge": fast-forward mai
   - Range-diff uses `--creation-factor=100`. With the default, small commits went unpaired and showed as "dropped + added".
 - **Also fixed in Phase 4:**
   - The sandbox template's `uv.lock` was locked with `exclude-newer` that `pyproject.toml` didn't declare, so sandbox CI failed on every run (a Phase 1 bug, now covered by a regression test).
-  - `setup` output dirs (see §2).
+  - `setup` output dirs (the `../out/` directories now exist on a fresh runner).
 
 ### 5. Setup checks for the new session
 ```bash
 uv sync && make generate
 make baml-smoke   # 5 passed, 0 skipped (REBASE_ANTHROPIC_API_KEY)
 make lint
-uv run pytest tests/unit -q   # 284 pass; `make test` adds the real-LLM scenarios (~$0.19)
+uv run pytest tests/unit -q   # 332 pass; `make test` adds the real-LLM scenarios (~$0.19)
 ```
 
 ### 6. Things already learned (don't re-discover them)

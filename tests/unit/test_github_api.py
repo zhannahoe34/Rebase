@@ -55,6 +55,30 @@ def test_eligibility(reviews, labels, expected):
     assert gh.eligibility({**PR, "labels": labels}) == expected
 
 
+def test_remove_label_encodes_the_name():
+    seen = []
+
+    def delete(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.raw_path.decode())
+        return httpx.Response(200, json=[])
+
+    client({"DELETE /repos/o/r/issues/5/labels/rebase:approved": delete}).remove_label(
+        5, APPROVED_LABEL
+    )
+    assert seen == ["/repos/o/r/issues/5/labels/rebase%3Aapproved"]
+
+
+def test_remove_label_ignores_a_label_that_is_not_there():
+    gh = client({"DELETE /repos/o/r/issues/5/labels/rebase:approved": httpx.Response(404)})
+    gh.remove_label(5, APPROVED_LABEL)  # no raise
+
+
+def test_remove_label_surfaces_other_errors():
+    gh = client({"DELETE /repos/o/r/issues/5/labels/rebase:approved": httpx.Response(403)})
+    with pytest.raises(GitHubError):
+        gh.remove_label(5, APPROVED_LABEL)
+
+
 def test_open_prs_paginates_and_filters_by_base():
     seen = []
 

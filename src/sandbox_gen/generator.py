@@ -19,6 +19,7 @@ rerun deletes and rebuilds the repo (only if this tool created it).
 import json
 import os
 import shutil
+import stat
 import subprocess
 import tempfile
 from dataclasses import asdict, dataclass
@@ -27,7 +28,7 @@ from typing import Annotated
 
 import typer
 
-from rebase_agent.github_api import GitHub, sandbox_repo, token
+from rebase_agent.github_api import APPROVED_LABEL, GitHub, sandbox_repo, token
 from sandbox_gen.scenarios import SCENARIOS, WAVES
 from sandbox_gen.scenarios.base import Scenario, apply
 
@@ -103,11 +104,17 @@ def _commit(repo: Path, tree: dict[str, str], message: str, date: str) -> str:
     return _git(repo, "rev-parse", "HEAD")
 
 
+def _make_writable_and_retry(func, path, _exc) -> None:
+    """rmtree hook: git marks object files read-only, which Windows refuses to delete."""
+    os.chmod(path, stat.S_IWRITE)
+    func(path)
+
+
 def _reset_dir(dest: Path) -> None:
     if dest.exists():
         if not (dest / ".git" / MARKER).exists():
             raise typer.BadParameter(f"{dest} exists and wasn't created by rebase-sandbox")
-        shutil.rmtree(dest)
+        shutil.rmtree(dest, onexc=_make_writable_and_retry)
     dest.mkdir(parents=True)
 
 
@@ -251,10 +258,11 @@ PR_MARKER = "<!-- rebase-sandbox scenario -->"
 
 def pr_body(s: Scenario) -> str:
     wave = next(i + 1 for i, (_, names) in enumerate(WAVES) if s.name in names)
+    stages = " or ".join(f"`{st}`" for st in (s.expected.stage, *s.expected.also_stages))
     return (
         f"{s.pr.body}\n\n---\n{PR_MARKER}\nScenario `{s.name}`: {s.description}\n\n"
         f"Its merged change lands on main in wave {wave}. Expected then: "
-        f"**{s.expected.final}** at `{s.expected.stage}`. {s.expected.note}\n"
+        f"**{s.expected.final}** at {stages}. {s.expected.note}\n"
     )
 
 
@@ -299,7 +307,9 @@ def _push_waves(remote: str | None, *, fresh: bool, label_approved: bool) -> Non
                 pr = gh.create_pr(f"pr/{name}", "main", **fields)
                 verb = "opened"
             if label_approved:
-                gh.add_label(pr["number"], "rebase:approved")
+                # Unapproved scenarios must stay out of the workflow's matrix, even on a
+                # PR that carried the label from an earlier run.
+                (gh.add_label if s.approved else gh.remove_label)(pr["number"], APPROVED_LABEL)
             typer.echo(f"{verb} #{pr['number']} pr/{name} -> main", err=True)
             out.append({"scenario": name, "pr_number": pr["number"], "pr_url": pr["html_url"]})
     typer.echo(json.dumps(out, indent=2))

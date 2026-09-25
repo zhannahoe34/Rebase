@@ -107,6 +107,12 @@ Each scenario is a base commit, a change merged to main, and an open PR. Its exp
 | 3 | `semantic_break` | Main changes a function signature; the PR adds a call using the old signature. Applies cleanly, tests fail | The verifier catches it and escalates (**headline demo case**) |
 | 4 | `migration_collision` | Both sides add a migration with the same number | The policy forces escalation; the resolver is never called |
 | 5 | `lockfile_touch` | Main updates a lockfile | The policy escalates |
+| 6 | `conflicting_intent` | Both sides rewrite the same lines of `reserve()` with contradictory behaviour | Escalated, never pushed: no mechanical resolution passes the tests (keep-both, ours and theirs all fail; unit-tested) |
+| 7 | `behavior_change` | Main changes what `apply_discount`'s argument means (percent to fraction), same signature; the PR adds a caller for the old meaning | Escalated: orchestrator, or the verifier via the failing tests |
+| 8 | `multi_file_conflict` | Resolvable conflicts in two files (`shipping.py`, `tax.py`, added to the template) | Resolver keeps both sides in both files → pushed |
+| 9 | `auth_touch` | The PR (not main) adds a function to `shop/auth/tokens.py` | Policy escalates (`auth:pr:`), though the change is safe |
+| 10 | `ci_touch` | The PR edits `.github/workflows/ci.yml` | Policy escalates (`ci:pr:`) |
+| 11 | `unapproved` | A clean PR with no approval label | Not in the matrix; no comment |
 
 The generator is idempotent: rerunning it resets the sandbox to a known state.
 
@@ -187,6 +193,13 @@ Anything else still escalates, including dropped or added commits, changes outsi
 - **Q2b, eligibility:** an APPROVED review (and no reviewer's latest review requesting changes), or the `rebase:approved` label. The label is the fallback because GitHub blocks self-approval and the session acts as the user. A GitHub App token can be swapped in later without code changes.
 - **Workflow ref:** the sandbox workflow checks out Rebase at `vars.REBASE_REF || 'main'`, so an unmerged phase branch can be tested. It must go back to `main` after merging.
 
+## D24 — Expanded scenarios (2026-09-25, decided)
+- Six scenarios added (D15 rows 6–11) for behaviours the first five didn't cover live: an unresolvable conflict, a semantic break with no signature change, a multi-file resolution, policy hits on the PR side (auth, CI), and eligibility filtering.
+- `Expected` gained `also_stages` for LLM-dependent escalations (`final` stays exact, the stage may be any listed one), and `Scenario` gained `approved` (`generate --push --label-approved` adds the label to approved scenarios and *removes* it from the others, so a stale label can't leak in).
+- `tests/unit/test_waves.py` checks every scenario's declared outcome against the policy computed for its wave, and that each PR in the shared wave conflicts only with its own merged change.
+- The template gained `shop/shipping.py` and `shop/tax.py` (with tests), which changes the base commit; the generator retargets the existing PRs on reset.
+- Windows fixes found while running the suite locally: `rmtree` of read-only git objects in the generator, forward-slash paths in the resolver tools, and an explicit UTF-8 read of the report snapshot.
+
 ## Changelog
 - 2026-09-24: Initial version from the kickoff brief.
 - 2026-09-24: D18 added from the user's answers to the open questions.
@@ -195,3 +208,4 @@ Anything else still escalates, including dropped or added commits, changes outsi
 - 2026-09-24: D21 (Phase 3 choices) added.
 - 2026-09-25: D22 (Q4 option 2: stale check allows changes confined to resolved conflicts).
 - 2026-09-25: D23 (sandbox PRs target main with waves; label-based eligibility; REBASE_REF).
+- 2026-09-25: D24 (expanded scenarios 6–11; unapproved handling; Windows fixes).
