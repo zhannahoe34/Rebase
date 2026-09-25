@@ -1,7 +1,7 @@
 """Per-PR pipeline (PLAN.md §0.5).
 
 `decide_pr` stops at the decision. `run_pr` goes on: throwaway clone, rebase, resolver
-(only if the rebase conflicts), verifier, stale check, then push (Phase 4) or "would push".
+(only if the rebase conflicts), verifier, stale check, then push (or "would push").
 The merged-change summary is computed once per run and reused for every PR (D4).
 """
 
@@ -13,6 +13,8 @@ import anyio
 
 from rebase_agent import analysts, config, orchestrator
 from rebase_agent.git_ops import commit_message, full_diff, merge_base, rev_parse
+from rebase_agent.github_api import PushRejected, PushTarget
+from rebase_agent.github_api import push as git_push
 from rebase_agent.ledger import Ledger, read_rows
 from rebase_agent.models import (
     CostBreakdown,
@@ -138,17 +140,19 @@ def run_pr(
     ledger: Ledger,
     pr_number: int | None = None,
     force_resolve: bool = False,
-    push: bool = False,
+    push: PushTarget | None = None,
 ) -> RunOutcome:
-    """Every outcome, including errors, comes back as a RunOutcome (never raises)."""
-    if push:
-        raise NotImplementedError("push is Phase 4; run without --push for a dry run")
+    """Every outcome, including errors, comes back as a RunOutcome (never raises).
+
+    Without `push` it's a dry run ("would push"). With it, the rebased branch is pushed
+    with --force-with-lease only after the verifier and stale check pass.
+    """
     start = time.monotonic()
     first_row = len(read_rows(ledger.run_dir))
     out: dict = {
         "pr_number": pr_number,
         "pr_branch": pr_branch,
-        "dry_run": not push,
+        "dry_run": push is None,
         "signals": None,
         "merged_summary": merged_summary,
         "pr_summary": None,
@@ -186,6 +190,10 @@ def run_pr(
 
         stage = "resolver"
         workdir, onto, head = prepare_workdir(repo, merged, pr_branch)
+        if push is not None and head != push.expected_sha:
+            return done(
+                "escalated", stage, f"PR head moved: {head[:12]} != {push.expected_sha[:12]}"
+            )
         resolved = anyio.run(
             lambda: resolve(
                 workdir,
@@ -221,7 +229,14 @@ def run_pr(
         out["stale"] = stale_check(workdir, old_base, head, onto, "HEAD")
         if not out["stale"].unchanged:
             return done("escalated", stage)
-        return done("pushed", "push")
+
+        stage = "push"
+        if push is not None:
+            try:
+                git_push(workdir, push)
+            except PushRejected as e:
+                return done("escalated", stage, str(e))
+        return done("pushed", stage)
     except Exception as e:  # noqa: BLE001 - reported as an error outcome, never silent
         return done("error", stage, f"{type(e).__name__}: {e}"[:1000])
     finally:

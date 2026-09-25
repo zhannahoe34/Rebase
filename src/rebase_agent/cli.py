@@ -8,6 +8,9 @@ from typing import Annotated
 import typer
 
 from rebase_agent import ledger as ledger_mod
+from rebase_agent.git_ops import git
+from rebase_agent.github_api import GitHub, PushTarget, sandbox_repo
+from rebase_agent.github_api import token as gh_token
 from rebase_agent.ledger import Ledger
 from rebase_agent.models import PRSummary
 from rebase_agent.pipeline import decide_pr, run_pr, summarize_merged
@@ -50,10 +53,36 @@ def setup(
     base: Annotated[str, typer.Option(help="Main before the push.")],
     out: Annotated[Path, typer.Option(help="Where to write the merged-change summary JSON.")],
     merged: Annotated[str, typer.Option(help="Main after the push.")] = "main",
+    github_base: Annotated[
+        str | None,
+        typer.Option(help="List open PRs targeting this branch on SANDBOX_REPO (Actions)."),
+    ] = None,
+    matrix_out: Annotated[
+        Path | None, typer.Option(help="With --github-base: write eligible PR numbers as JSON.")
+    ] = None,
     run_dir: RunDirOpt = None,
     scenario: ScenarioOpt = None,
 ) -> None:
-    """Summarize the merged change once (base..merged) and write it to OUT for reuse."""
+    """Summarize the merged change once (base..merged) and write it to OUT for reuse.
+
+    With --github-base, first list eligible PRs (approved review or the approval label);
+    the summary is skipped when none are eligible, so a no-op run costs nothing."""
+    if github_base is not None:
+        gh = GitHub(sandbox_repo(), gh_token())
+        eligible: list[int] = []
+        for pr in gh.open_prs(base=github_base):
+            ok, why = gh.eligibility(pr)
+            typer.echo(
+                f"#{pr['number']} {pr['head']['ref']}: {'eligible' if ok else 'skip'} ({why})",
+                err=True,
+            )
+            if ok:
+                eligible.append(pr["number"])
+        if matrix_out is not None:
+            matrix_out.write_text(json.dumps(eligible) + "\n")
+        if not eligible:
+            typer.echo("no eligible PRs; merged summary not computed", err=True)
+            return
     ledger = Ledger(_run_dir(run_dir), scenario=scenario)
     summary = summarize_merged(repo, base, merged, ledger=ledger)
     out.write_text(summary.model_dump_json(indent=2) + "\n")
@@ -89,8 +118,13 @@ def decide(
 @app.command("run-pr")
 def run_pr_cmd(
     repo: Annotated[Path, typer.Option(help="Local clone.")],
-    pr_branch: Annotated[str, typer.Option(help="PR head ref.")],
     base: Annotated[str, typer.Option(help="Main before the push.")],
+    pr_branch: Annotated[
+        str | None, typer.Option(help="PR head ref (local mode; or use --pr).")
+    ] = None,
+    pr: Annotated[
+        int | None, typer.Option(help="PR number on SANDBOX_REPO; fetches its head branch.")
+    ] = None,
     merged: Annotated[str, typer.Option(help="Main after the push.")] = "main",
     merged_summary: Annotated[
         Path | None, typer.Option(help="Summary JSON from `setup`; computed here if omitted.")
@@ -98,25 +132,59 @@ def run_pr_cmd(
     force_resolve: Annotated[
         bool, typer.Option(help="Skip the orchestrator (policy still applies). Q3.")
     ] = False,
+    push: Annotated[
+        bool, typer.Option(help="With --pr: push the rebased branch (force-with-lease).")
+    ] = False,
+    comment: Annotated[bool, typer.Option(help="With --pr: post the outcome comment.")] = True,
     run_dir: RunDirOpt = None,
     scenario: ScenarioOpt = None,
 ) -> None:
-    """Full local pipeline for one PR (no push). Prints the comment markdown; writes
-    outcome JSON and markdown next to the ledger."""
+    """Full pipeline for one PR. Prints the comment markdown and writes outcome JSON and
+    markdown next to the ledger. With --pr it comments on every outcome, errors included."""
+    if (pr is None) == (pr_branch is None):
+        raise typer.BadParameter("give exactly one of --pr-branch or --pr")
+    if push and pr is None:
+        raise typer.BadParameter("--push needs --pr")
+    gh = GitHub(sandbox_repo(), gh_token()) if pr is not None else None
+    target: PushTarget | None = None
+    if gh is not None:
+        info = gh.get_pr(pr)
+        head_ref, head_sha = info["head"]["ref"], info["head"]["sha"]
+        git(
+            repo,
+            "fetch",
+            "--quiet",
+            "origin",
+            f"+refs/heads/{head_ref}:refs/remotes/origin/{head_ref}",
+        )
+        pr_branch = f"origin/{head_ref}"
+        if push:
+            target = PushTarget(url=gh.push_url(), branch=head_ref, expected_sha=head_sha)
+
     ledger = Ledger(_run_dir(run_dir), scenario=scenario)
     if merged_summary is not None:
         summary = PRSummary.model_validate_json(merged_summary.read_text())
     else:
         summary = summarize_merged(repo, base, merged, ledger=ledger)
     outcome = run_pr(
-        repo, base, merged, pr_branch, summary, ledger=ledger, force_resolve=force_resolve
+        repo,
+        base,
+        merged,
+        pr_branch,
+        summary,
+        ledger=ledger,
+        pr_number=pr,
+        force_resolve=force_resolve,
+        push=target,
     )
     stem = ledger.run_dir / f"outcome-{pr_branch.replace('/', '_')}"
     stem.with_suffix(".json").write_text(outcome.model_dump_json(indent=2) + "\n")
-    comment = render(outcome)
-    stem.with_suffix(".md").write_text(comment)
-    typer.echo(comment)
+    text = render(outcome)
+    stem.with_suffix(".md").write_text(text)
+    typer.echo(text)
     typer.echo(f"{outcome.final} at {outcome.stage}; {stem}.json", err=True)
+    if gh is not None and comment:
+        typer.echo(f"commented: {gh.post_comment(pr, text)}", err=True)
     if outcome.final == "error":
         raise typer.Exit(1)
 

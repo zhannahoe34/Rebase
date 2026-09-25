@@ -35,7 +35,7 @@ def render(o: RunOutcome) -> str:
         ),
     ]
     if o.error:
-        lines += ["", f"**Error:** {o.error}"]
+        lines += ["", f"**{'Error' if o.final == 'error' else 'Reason'}:** {o.error}"]
 
     if o.decision:
         d = o.decision

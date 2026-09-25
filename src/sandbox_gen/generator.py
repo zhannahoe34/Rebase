@@ -5,6 +5,13 @@ Local mode builds one git repo per scenario:
   `pr/<name>`   one commit on top of base (the open PR)
   `main`        one commit on top of base (the merged change)
 
+Push mode resets the GitHub sandbox (PLAN.md Q5: per-scenario base branches). Every
+scenario shares the same base commit, so one repo holds them all:
+  `main`, `base/<name>`   the base commit
+  `pr/<name>`             the PR, with an open PR `pr/<name>` -> `base/<name>`
+`trigger` then fast-forwards `base/<name>` to the merged commit, which is the "merge"
+that fires the sandbox's rebase workflow.
+
 Idempotent: fixed identities, dates and git config give identical SHAs on every run, and a
 rerun deletes and rebuilds the repo (only if this tool created it).
 """
@@ -13,12 +20,14 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Annotated
 
 import typer
 
+from rebase_agent.github_api import GitHub, sandbox_repo, token
 from sandbox_gen.scenarios import SCENARIOS
 from sandbox_gen.scenarios.base import Scenario, apply
 
@@ -129,19 +138,101 @@ def generate(
         Path | None, typer.Option(help="Directory to build scenario repos in (one per scenario).")
     ] = None,
     scenario: Annotated[str, typer.Option(help="Scenario name, or 'all'.")] = "all",
-    push: Annotated[bool, typer.Option(help="Reset the GitHub sandbox repo (Phase 4).")] = False,
+    push: Annotated[
+        bool, typer.Option(help="Reset SANDBOX_REPO on GitHub and (re)open the scenario PRs.")
+    ] = False,
+    remote: Annotated[
+        str | None, typer.Option(help="Push URL (default: SANDBOX_REPO with SANDBOX_REPO_TOKEN).")
+    ] = None,
+    label_approved: Annotated[
+        bool, typer.Option(help="With --push: add the rebase:approved label to each new PR.")
+    ] = False,
 ) -> None:
     """Build scenario repos and print their refs as JSON."""
+    names = _names(scenario)
     if push:
-        typer.echo("--push is not implemented yet (planned for Phase 4).", err=True)
-        raise typer.Exit(2)
+        _push_scenarios(names, remote, label_approved=label_approved)
+        return
     if local is None:
-        raise typer.BadParameter("pass --local DIR")
-    if scenario != "all" and scenario not in SCENARIOS:
-        raise typer.BadParameter(f"unknown scenario {scenario!r}; choose from {list(SCENARIOS)}")
-    names = list(SCENARIOS) if scenario == "all" else [scenario]
+        raise typer.BadParameter("pass --local DIR or --push")
     refs = [build_local(local.resolve() / name, SCENARIOS[name]) for name in names]
     typer.echo(json.dumps([asdict(r) for r in refs], indent=2))
+
+
+@app.command()
+def trigger(
+    scenario: Annotated[str, typer.Option(help="Scenario name, or 'all'.")] = "all",
+    remote: Annotated[
+        str | None, typer.Option(help="Push URL (default: SANDBOX_REPO with SANDBOX_REPO_TOKEN).")
+    ] = None,
+) -> None:
+    """ "Merge": fast-forward base/<name> to the scenario's merged commit on GitHub."""
+    with tempfile.TemporaryDirectory() as tmp:
+        for name in _names(scenario):
+            refs = build_local(Path(tmp) / name, SCENARIOS[name])
+            _git(
+                Path(refs.repo),
+                "push",
+                "-q",
+                _remote(remote),
+                f"{refs.main}:refs/heads/base/{name}",
+            )
+            typer.echo(f"base/{name} -> {refs.main[:12]} (merged)", err=True)
+
+
+def _names(scenario: str) -> list[str]:
+    if scenario != "all" and scenario not in SCENARIOS:
+        raise typer.BadParameter(f"unknown scenario {scenario!r}; choose from {list(SCENARIOS)}")
+    return list(SCENARIOS) if scenario == "all" else [scenario]
+
+
+def _remote(remote: str | None) -> str:
+    return remote or f"https://x-access-token:{token()}@github.com/{sandbox_repo()}.git"
+
+
+PR_MARKER = "<!-- rebase-sandbox scenario -->"
+
+
+def pr_body(s: Scenario) -> str:
+    return (
+        f"{s.pr.body}\n\n---\n{PR_MARKER}\nScenario `{s.name}`: {s.description}\n\n"
+        f"Expected: **{s.expected.final}** at `{s.expected.stage}`. {s.expected.note}\n"
+    )
+
+
+def _push_scenarios(names: list[str], remote: str | None, *, label_approved: bool) -> None:
+    """Force-reset main, base/<name> and pr/<name>, then close any open PR for each
+    pr/<name> and open a fresh one. The workflow ignores force-pushes and branch
+    creation, so a reset never runs the pipeline."""
+    gh = GitHub(sandbox_repo(), token())
+    url = _remote(remote)
+    with tempfile.TemporaryDirectory() as tmp:
+        built = {name: build_local(Path(tmp) / name, SCENARIOS[name]) for name in names}
+        first = next(iter(built.values()))
+        for name, refs in built.items():
+            for pr in gh.open_prs(head=refs.pr_branch):
+                gh.close_pr(pr["number"])
+                typer.echo(f"closed #{pr['number']} ({refs.pr_branch})", err=True)
+        _git(Path(first.repo), "push", "-q", "--force", url, f"{first.base}:refs/heads/main")
+        for name, refs in built.items():
+            _git(
+                Path(refs.repo),
+                "push",
+                "-q",
+                "--force",
+                url,
+                f"{refs.base}:refs/heads/base/{name}",
+                f"{refs.pr_head}:refs/heads/{refs.pr_branch}",
+            )
+        out = []
+        for name, refs in built.items():
+            s = SCENARIOS[name]
+            pr = gh.create_pr(refs.pr_branch, f"base/{name}", s.pr.title, pr_body(s))
+            if label_approved:
+                gh.add_label(pr["number"], "rebase:approved")
+            typer.echo(f"opened #{pr['number']} {refs.pr_branch} -> base/{name}", err=True)
+            out.append({**asdict(refs), "pr_number": pr["number"], "pr_url": pr["html_url"]})
+    typer.echo(json.dumps(out, indent=2))
 
 
 if __name__ == "__main__":

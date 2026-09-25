@@ -93,3 +93,29 @@ def test_real_conflict_is_resolvable_by_keeping_both(scenario_repos, tmp_path):
     original = added(scenario_repos["real_conflict"].pr_head)
     assert original
     assert added("HEAD") == original
+
+
+def test_all_scenarios_share_one_base_commit(scenario_repos):
+    """Push mode relies on this: main and every base/<name> start at the same commit."""
+    assert len({refs.base for refs in scenario_repos.values()}) == 1
+
+
+def test_rebase_workflow_skips_resets_and_never_pushes_base():
+    from sandbox_gen.generator import read_template
+
+    wf = read_template()[".github/workflows/rebase.yml"]
+    assert "!github.event.forced" in wf  # generator resets are force-pushes
+    assert "0000000000000000000000000000000000000000" in wf  # branch creation
+    assert 'branches: [main, "base/**"]' in wf
+    assert "--push" in wf and "SANDBOX_REPO_TOKEN" in wf and "GITHUB_TOKEN" not in wf
+
+
+def test_push_needs_a_token(monkeypatch):
+    from typer.testing import CliRunner
+
+    from sandbox_gen.generator import app
+
+    monkeypatch.delenv("SANDBOX_REPO_TOKEN", raising=False)
+    result = CliRunner().invoke(app, ["generate", "--push", "--scenario", "trivial"])
+    assert result.exit_code != 0
+    assert "SANDBOX_REPO_TOKEN" in str(result.exception)
