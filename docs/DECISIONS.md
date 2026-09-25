@@ -180,6 +180,13 @@ A changed PR patch may now be pushed if all of these hold:
 
 Anything else still escalates, including dropped or added commits, changes outside conflicted files, and any change on a clean rebase. The PR comment lists every changed line under "changed only inside resolved conflicts". Range-diff runs with `--creation-factor=100`, so small commits pair up and the reasons name lines instead of "dropped/added".
 
+## D23 — Sandbox layout and eligibility (2026-09-25, decided)
+- **Q5, layout:** every sandbox PR targets `main`, following the user's direction that "things typically PR into main". This replaces the per-scenario `base/<name>` layout tried first.
+  - Scenario merged changes land on `main` in waves of merge commits (`rebase-sandbox trigger --wave N`): code changes first, then the risky ones (migration, lockfile).
+  - One push to `main` fans out to every eligible open PR.
+- **Q2b, eligibility:** an APPROVED review (and no reviewer's latest review requesting changes), or the `rebase:approved` label. The label is the fallback because GitHub blocks self-approval and the session acts as the user. A GitHub App token can be swapped in later without code changes.
+- **Workflow ref:** the sandbox workflow checks out Rebase at `vars.REBASE_REF || 'main'`, so an unmerged phase branch can be tested. It must go back to `main` after merging.
+
 ## Changelog
 - 2026-09-24: Initial version from the kickoff brief.
 - 2026-09-24: D18 added from the user's answers to the open questions.
@@ -187,3 +194,4 @@ Anything else still escalates, including dropped or added commits, changes outsi
 - 2026-09-24: D19 (transport, Q13 option 1) and D20 (Phase 2 additions) added.
 - 2026-09-24: D21 (Phase 3 choices) added.
 - 2026-09-25: D22 (Q4 option 2: stale check allows changes confined to resolved conflicts).
+- 2026-09-25: D23 (sandbox PRs target main with waves; label-based eligibility; REBASE_REF).
