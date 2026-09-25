@@ -592,6 +592,7 @@ Never cut: policy tests, the verifier, or honest PR notes.
   - On the normal path, record what the orchestrator decided (the stage, decision and reasons) in test output and the eval table, as a note rather than a pass or fail.
   - Symbol overlap stays definitions-only (done in Phase 1).
 - **Q4 — Stale check.** Accepted: "patch unchanged" means identical added and removed lines per commit, ignoring context and hunk headers. `real_conflict` already has this property (tested in Phase 1).
+  - **Revised 2026-09-25 (option 2, DECISIONS D22):** a changed patch is also allowed when every change is confined to resolved conflicts and the verifier passed; the comment lists the changed lines.
 - **Q5 — GitHub layout.** Not final, but the user prefers **branches over reusing `main`**. Working proposal for Phase 4:
   - Each scenario (or wave) gets its own long-lived base branch, e.g. `base/<scenario>`, that stands in for `main`.
   - PRs target that branch, and the workflow triggers on pushes to `main` and `base/**`.

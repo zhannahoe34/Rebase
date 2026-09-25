@@ -226,8 +226,10 @@ def run_pr(
 
         stage = "stale"
         old_base = merge_base(workdir, onto, head)
-        out["stale"] = stale_check(workdir, old_base, head, onto, "HEAD")
-        if not out["stale"].unchanged:
+        out["stale"] = stale_check(
+            workdir, old_base, head, onto, "HEAD", conflicts=resolved.conflict_hunks
+        )
+        if not (out["stale"].unchanged or out["stale"].within_conflicts):
             return done("escalated", stage)
 
         stage = "push"

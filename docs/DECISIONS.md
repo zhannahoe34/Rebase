@@ -170,9 +170,20 @@ Why: BAML's built-in Rust client doesn't trust the cloud sandbox's egress CA, wh
 - **Verifier:** the intent check runs even when the tests fail, so the comment has both. On `semantic_break` the tests catch the break; the intent check says "preserved", because the diff does what the PR says.
 - **Per-PR cost in `RunOutcome`:** the rows written during that `run_pr` call, plus the run's shared merged-summary cost shown in full. `rebase-agent costs` shows the per-PR share.
 
+## D22 — Stale check allows changes confined to resolved conflicts (2026-09-25, decided)
+Q4 option 2, chosen by the user after a live dry run on sandbox PR #15. There, two PRs edited the same import line, so any correct resolution had to change the PR's own line, and strict Q4 escalated a rebase the agent had resolved and the verifier had passed.
+
+A changed PR patch may now be pushed if all of these hold:
+- the verifier passed (`run_pr` runs the stale check only after it);
+- every changed patch line is in a file that conflicted during the rebase;
+- every line of the approved patch that changed appeared inside a conflict hunk the resolver saw. The throwaway clone uses `merge.conflictStyle=diff3`, so the hunks include the base side.
+
+Anything else still escalates, including dropped or added commits, changes outside conflicted files, and any change on a clean rebase. The PR comment lists every changed line under "changed only inside resolved conflicts". Range-diff runs with `--creation-factor=100`, so small commits pair up and the reasons name lines instead of "dropped/added".
+
 ## Changelog
 - 2026-09-24: Initial version from the kickoff brief.
 - 2026-09-24: D18 added from the user's answers to the open questions.
 - 2026-09-24: LLM key renamed to `REBASE_ANTHROPIC_API_KEY`; BAML transport blocker recorded as PLAN.md Q13.
 - 2026-09-24: D19 (transport, Q13 option 1) and D20 (Phase 2 additions) added.
 - 2026-09-24: D21 (Phase 3 choices) added.
+- 2026-09-25: D22 (Q4 option 2: stale check allows changes confined to resolved conflicts).

@@ -50,15 +50,18 @@ def test_git_add_refuses_remaining_markers(conflicted):
 def test_manual_resolution_through_tools(conflicted):
     """Keep both sides by hand, as the agent should, and finish the rebase."""
     text = conflicted.read_file("shop/inventory.py")
+    assert "|||||||" in text  # the clone uses diff3 markers
     lines, out, side = text.splitlines(keepends=True), [], None
     for line in lines:
         if line.startswith("<<<<<<<"):
             side = "ours"
+        elif line.startswith("|||||||") and side:
+            side = "base"  # diff3: the common ancestor's lines are dropped
         elif line.startswith("=======") and side:
             side = "theirs"
         elif line.startswith(">>>>>>>") and side:
             side = None
-        else:
+        elif side != "base":
             out.append(line)
     conflicted.write_file("shop/inventory.py", "".join(out))
     assert conflicted.run_tests().startswith("PASSED")

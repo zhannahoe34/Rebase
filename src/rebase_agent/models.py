@@ -90,6 +90,7 @@ class ResolverResult(BaseModel):
     files_touched: list[str]
     head_sha: str | None
     tool_calls: list[str] = []  # tool names in call order (shows skill/MCP use)
+    conflict_hunks: dict[str, list[str]] = {}  # every conflict the resolver saw (diff3 style)
 
 
 class VerifierResult(BaseModel):
@@ -102,6 +103,7 @@ class VerifierResult(BaseModel):
 
 class StaleCheckResult(BaseModel):
     unchanged: bool
+    within_conflicts: bool = False  # Q4 option 2: changed, but only inside resolved conflicts
     range_diff: str
     reasons: list[str] = []  # why the patch counts as changed (empty when unchanged)
 

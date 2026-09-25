@@ -48,6 +48,7 @@ class Workdir:
         self.escalation: str | None = None
         self.files_touched: set[str] = set()
         self.tool_calls: list[str] = []  # names, in call order (filled by the agent loop)
+        self.conflict_hunks: dict[str, list[str]] = {}  # every conflict seen, per file
 
     # --- helpers -------------------------------------------------------------------
     def path(self, rel: str) -> Path:
@@ -70,6 +71,20 @@ class Workdir:
     def conflicted(self) -> list[str]:
         out = self.git("diff", "--name-only", "--diff-filter=U").stdout
         return sorted(line for line in out.splitlines() if line)
+
+    def record_conflicts(self) -> None:
+        """Remember the marker regions of every currently conflicted file."""
+        for rel in self.conflicted():
+            hunks, current = self.conflict_hunks.setdefault(rel, []), None
+            path = self.root / rel
+            for line in path.read_text().splitlines() if path.is_file() else []:
+                if line.startswith("<<<<<<<"):
+                    current = [line]
+                elif current is not None:
+                    current.append(line)
+                    if line.startswith(">>>>>>>"):
+                        hunks.append("\n".join(current))
+                        current = None
 
     def rebase_in_progress(self) -> bool:
         git_dir = self.root / ".git"
@@ -107,7 +122,8 @@ class Workdir:
         rel = str(p.relative_to(self.root))
         if rel not in self.conflicted():
             raise ToolError(f"{rel}: not a conflicted file")
-        if any(line.startswith(("<<<<<<<", ">>>>>>>")) for line in p.read_text().splitlines()):
+        markers = ("<<<<<<<", "|||||||", ">>>>>>>")
+        if any(line.startswith(markers) for line in p.read_text().splitlines()):
             raise ToolError(f"{rel}: conflict markers remain")
         proc = self.git("add", "--", rel)
         if proc.returncode != 0:
@@ -123,6 +139,7 @@ class Workdir:
         out = (proc.stdout + proc.stderr).strip()[-OUTPUT_TAIL:]
         if proc.returncode == 0 and not self.rebase_in_progress():
             return f"rebase complete\n{out}"
+        self.record_conflicts()
         return f"rebase stopped again\n{out}\n{self.list_conflicts()}"
 
     def escalate(self, reason: str) -> str:

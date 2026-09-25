@@ -57,6 +57,9 @@ def prepare_workdir(repo: Path, onto: str, head: str) -> tuple[Path, str, str]:
         ["-C", str(workdir), "remote", "remove", "origin"],
         ["-C", str(workdir), "config", "user.name", IDENTITY[0]],
         ["-C", str(workdir), "config", "user.email", IDENTITY[1]],
+        # diff3 markers include the base side: more context for the agent, and the stale
+        # check can tell which of the PR's original lines were inside a conflict.
+        ["-C", str(workdir), "config", "merge.conflictStyle", "diff3"],
         ["-C", str(workdir), "cat-file", "-e", f"{onto_sha}^{{commit}}"],
     ):
         subprocess.run(["git", *cmd], capture_output=True, text=True, check=True)
@@ -130,6 +133,7 @@ async def resolve(
     if not wd.rebase_in_progress():
         return _fail(wd, "error", f"git rebase failed: {rebase.stderr.strip()[-500:]}", 0, 0.0)
 
+    wd.record_conflicts()
     budget = Budget(caps)
     result: ResultMessage | None = None
     start = time.monotonic()
@@ -184,6 +188,7 @@ async def resolve(
         files_touched=sorted(wd.files_touched),
         head_sha=wd.git("rev-parse", "HEAD").stdout.strip(),
         tool_calls=wd.tool_calls,
+        conflict_hunks=wd.conflict_hunks,
     )
 
 
@@ -198,6 +203,7 @@ def _fail(wd: Workdir, status: str, reason: str, turns: int, cost: float) -> Res
         files_touched=sorted(wd.files_touched),
         head_sha=None,
         tool_calls=wd.tool_calls,
+        conflict_hunks=wd.conflict_hunks,
     )
 
 

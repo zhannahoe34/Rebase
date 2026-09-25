@@ -16,8 +16,10 @@ intent survives, or to escalate.
 2. Call `list_conflicts` to see the files git is currently stopped on.
 3. For each conflicted file:
    - `read_file` it.
-   - Edit **only** the conflict hunks (between `<<<<<<<` and `>>>>>>>`). Keep the
-     changes from both sides unless they are truly incompatible. Remove all markers.
+   - Edit **only** the conflict hunks (between `<<<<<<<` and `>>>>>>>`). Markers are
+     diff3 style: `|||||||` starts the original lines both sides changed; use them to
+     understand each side's intent, then drop them. Keep the changes from both sides
+     unless they are truly incompatible. Remove all markers.
    - `write_file` the whole file back.
    - `run_tests`. If tests fail because of your resolution, fix the resolution.
    - `git_add` the file.
