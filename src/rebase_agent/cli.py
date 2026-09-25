@@ -67,6 +67,9 @@ def setup(
 
     With --github-base, first list eligible PRs (approved review or the approval label);
     the summary is skipped when none are eligible, so a no-op run costs nothing."""
+    for path in (out, matrix_out):
+        if path is not None:
+            path.parent.mkdir(parents=True, exist_ok=True)
     if github_base is not None:
         gh = GitHub(sandbox_repo(), gh_token())
         eligible: list[int] = []
