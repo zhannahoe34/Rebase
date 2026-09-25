@@ -1,4 +1,5 @@
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -119,3 +120,15 @@ def test_push_needs_a_token(monkeypatch):
     result = CliRunner().invoke(app, ["generate", "--push", "--scenario", "trivial"])
     assert result.exit_code != 0
     assert "SANDBOX_REPO_TOKEN" in str(result.exception)
+
+
+@pytest.mark.parametrize("src", ["template", "assets/lockfile_touch"])
+def test_sandbox_lockfiles_match_pyproject(src, tmp_path):
+    """The sandbox CI runs `uv sync --locked`; a lock/pyproject mismatch fails every run."""
+    root = Path(__file__).resolve().parents[2] / "src/sandbox_gen" / src
+    for name in ("pyproject.toml", "uv.lock"):
+        shutil.copy(root / name, tmp_path / name)
+    proc = subprocess.run(
+        ["uv", "lock", "--check"], cwd=tmp_path, capture_output=True, text=True, check=False
+    )
+    assert proc.returncode == 0, proc.stderr
