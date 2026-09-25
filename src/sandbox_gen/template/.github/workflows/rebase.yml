@@ -1,10 +1,10 @@
 name: rebase
-# When a base branch moves, rebase or escalate every eligible open PR that targets it.
+# When main moves, rebase or escalate every eligible open PR that targets it.
 # Eligible = an APPROVED review or the `rebase:approved` label (PLAN.md Q2b).
-# Pushes only PR branches, never main or base/**, so it can't retrigger itself.
+# Pushes only PR branches, never main, so it can't retrigger itself.
 on:
   push:
-    branches: [main, "base/**"]
+    branches: [main]
 
 concurrency:
   group: rebase-${{ github.ref }}
@@ -23,7 +23,7 @@ env:
 jobs:
   setup:
     # Skip branch creation and force-pushes (the generator's resets); only a real
-    # fast-forward of the base branch is a "merge".
+    # fast-forward of main is a "merge".
     if: ${{ !github.event.forced && github.event.before != '0000000000000000000000000000000000000000' }}
     runs-on: ubuntu-latest
     outputs:

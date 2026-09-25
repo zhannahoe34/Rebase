@@ -5,12 +5,12 @@ Local mode builds one git repo per scenario:
   `pr/<name>`   one commit on top of base (the open PR)
   `main`        one commit on top of base (the merged change)
 
-Push mode resets the GitHub sandbox (PLAN.md Q5: per-scenario base branches). Every
-scenario shares the same base commit, so one repo holds them all:
-  `main`, `base/<name>`   the base commit
-  `pr/<name>`             the PR, with an open PR `pr/<name>` -> `base/<name>`
-`trigger` then fast-forwards `base/<name>` to the merged commit, which is the "merge"
-that fires the sandbox's rebase workflow.
+Push mode resets the GitHub sandbox so it looks like a real repo (PLAN.md Q5):
+  `main`        the base commit
+  `pr/<name>`   one branch per scenario, each with an open PR `pr/<name>` -> `main`
+`trigger --wave N` then fast-forwards main by one merge commit that lands a wave of
+scenarios' merged changes (`scenarios.WAVES`); that push fires the rebase workflow for
+every open eligible PR. Every scenario shares the same base commit, which makes this work.
 
 Idempotent: fixed identities, dates and git config give identical SHAs on every run, and a
 rerun deletes and rebuilds the repo (only if this tool created it).
@@ -28,7 +28,7 @@ from typing import Annotated
 import typer
 
 from rebase_agent.github_api import GitHub, sandbox_repo, token
-from sandbox_gen.scenarios import SCENARIOS
+from sandbox_gen.scenarios import SCENARIOS, WAVES
 from sandbox_gen.scenarios.base import Scenario, apply
 
 TEMPLATE = Path(__file__).resolve().parent / "template"
@@ -39,6 +39,7 @@ _DATES = {
     "pr": "2026-01-02T00:00:00+00:00",
     "merged": "2026-01-03T00:00:00+00:00",
 }
+_WAVE_DATE = "2026-01-{day:02d}T00:00:00+00:00"  # wave N is dated Jan (3 + N)
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 
@@ -132,27 +133,75 @@ def build_local(dest: Path, scenario: Scenario) -> Refs:
     return Refs(scenario.name, str(dest), base, main, pr_branch, pr_head)
 
 
+@dataclass(frozen=True)
+class WaveRefs:
+    repo: str
+    base: str
+    waves: list[str]  # merge commit per wave, each on top of the previous one
+    prs: dict[str, str]  # scenario -> PR head sha (branch pr/<name>)
+
+
+def wave_message(index: int) -> str:
+    label, names = WAVES[index]
+    lines = [
+        f"Merge wave {index + 1} ({label}): " + "; ".join(SCENARIOS[n].merged.title for n in names),
+        "",
+    ]
+    for n in names:
+        m = SCENARIOS[n].merged
+        lines += [f"- {m.title}: {m.body}"]
+    return "\n".join(lines) + "\n"
+
+
+def build_waves(dest: Path) -> WaveRefs:
+    """One repo: main = base + one commit per wave; pr/<name> for every scenario."""
+    _reset_dir(dest)
+    _git(dest, "init", "-q", "-b", "main")
+    (dest / ".git" / MARKER).write_text("waves\n")
+    base_tree = read_template()
+    base = _commit(dest, base_tree, "Initial sandbox state", _DATES["base"])
+    prs: dict[str, str] = {}
+    for name, s in SCENARIOS.items():
+        _git(dest, "checkout", "-q", "-b", f"pr/{name}", base)
+        prs[name] = _commit(
+            dest, apply(base_tree, s.pr.ops), f"{s.pr.title}\n\n{s.pr.body}\n", _DATES["pr"]
+        )
+    _git(dest, "checkout", "-q", "main")
+    tree, waves = base_tree, []
+    for i, (_, names) in enumerate(WAVES):
+        for n in names:
+            tree = apply(tree, SCENARIOS[n].merged.ops)
+        waves.append(_commit(dest, tree, wave_message(i), _WAVE_DATE.format(day=4 + i)))
+    _git(dest, "reset", "-q", "--hard", base)  # main stays at base; waves are reachable by SHA
+    for i, sha in enumerate(waves):
+        _git(dest, "tag", f"wave/{i + 1}", sha)
+    return WaveRefs(str(dest), base, waves, prs)
+
+
 @app.command()
 def generate(
     local: Annotated[
         Path | None, typer.Option(help="Directory to build scenario repos in (one per scenario).")
     ] = None,
-    scenario: Annotated[str, typer.Option(help="Scenario name, or 'all'.")] = "all",
+    scenario: Annotated[str, typer.Option(help="Scenario name, or 'all' (local mode).")] = "all",
     push: Annotated[
-        bool, typer.Option(help="Reset SANDBOX_REPO on GitHub and (re)open the scenario PRs.")
+        bool, typer.Option(help="Reset SANDBOX_REPO on GitHub: main at base, one PR per scenario.")
     ] = False,
     remote: Annotated[
         str | None, typer.Option(help="Push URL (default: SANDBOX_REPO with SANDBOX_REPO_TOKEN).")
     ] = None,
+    fresh: Annotated[
+        bool, typer.Option(help="With --push: close existing scenario PRs and open new ones.")
+    ] = False,
     label_approved: Annotated[
-        bool, typer.Option(help="With --push: add the rebase:approved label to each new PR.")
+        bool, typer.Option(help="With --push: add the rebase:approved label to each PR.")
     ] = False,
 ) -> None:
-    """Build scenario repos and print their refs as JSON."""
-    names = _names(scenario)
+    """Build scenario repos (local) or reset the GitHub sandbox (push)."""
     if push:
-        _push_scenarios(names, remote, label_approved=label_approved)
+        _push_waves(remote, fresh=fresh, label_approved=label_approved)
         return
+    names = _names(scenario)
     if local is None:
         raise typer.BadParameter("pass --local DIR or --push")
     refs = [build_local(local.resolve() / name, SCENARIOS[name]) for name in names]
@@ -161,23 +210,30 @@ def generate(
 
 @app.command()
 def trigger(
-    scenario: Annotated[str, typer.Option(help="Scenario name, or 'all'.")] = "all",
+    wave: Annotated[int, typer.Option(help=f"Wave number, 1..{len(WAVES)}.")],
     remote: Annotated[
         str | None, typer.Option(help="Push URL (default: SANDBOX_REPO with SANDBOX_REPO_TOKEN).")
     ] = None,
 ) -> None:
-    """ "Merge": fast-forward base/<name> to the scenario's merged commit on GitHub."""
+    """ "Merge": fast-forward main by wave N's merge commit (main must be at wave N-1)."""
+    if not 1 <= wave <= len(WAVES):
+        raise typer.BadParameter(f"wave must be 1..{len(WAVES)}")
+    url = _remote(remote)
     with tempfile.TemporaryDirectory() as tmp:
-        for name in _names(scenario):
-            refs = build_local(Path(tmp) / name, SCENARIOS[name])
-            _git(
-                Path(refs.repo),
-                "push",
-                "-q",
-                _remote(remote),
-                f"{refs.main}:refs/heads/base/{name}",
+        refs = build_waves(Path(tmp) / "waves")
+        repo = Path(refs.repo)
+        expected = refs.base if wave == 1 else refs.waves[wave - 2]
+        current = _git(repo, "ls-remote", url, "refs/heads/main").split("\t")[0]
+        if current != expected:
+            raise typer.BadParameter(
+                f"remote main is at {current[:12]}, expected {expected[:12]} "
+                f"(wave {wave - 1 or 'base'}); trigger waves in order, or re-run generate --push"
             )
-            typer.echo(f"base/{name} -> {refs.main[:12]} (merged)", err=True)
+        _git(repo, "push", "-q", url, f"{refs.waves[wave - 1]}:refs/heads/main")
+    label, names = WAVES[wave - 1]
+    typer.echo(
+        f"main -> wave {wave} ({label}: {', '.join(names)}) {refs.waves[wave - 1][:12]}", err=True
+    )
 
 
 def _names(scenario: str) -> list[str]:
@@ -194,44 +250,54 @@ PR_MARKER = "<!-- rebase-sandbox scenario -->"
 
 
 def pr_body(s: Scenario) -> str:
+    wave = next(i + 1 for i, (_, names) in enumerate(WAVES) if s.name in names)
     return (
         f"{s.pr.body}\n\n---\n{PR_MARKER}\nScenario `{s.name}`: {s.description}\n\n"
-        f"Expected: **{s.expected.final}** at `{s.expected.stage}`. {s.expected.note}\n"
+        f"Its merged change lands on main in wave {wave}. Expected then: "
+        f"**{s.expected.final}** at `{s.expected.stage}`. {s.expected.note}\n"
     )
 
 
-def _push_scenarios(names: list[str], remote: str | None, *, label_approved: bool) -> None:
-    """Force-reset main, base/<name> and pr/<name>, then close any open PR for each
-    pr/<name> and open a fresh one. The workflow ignores force-pushes and branch
-    creation, so a reset never runs the pipeline."""
+def _push_waves(remote: str | None, *, fresh: bool, label_approved: bool) -> None:
+    """Force-reset main and every pr/<name>, delete leftover base/* branches from the old
+    layout, then (re)target one open PR per scenario at main. The workflow ignores
+    force-pushes and branch creation, so a reset never runs the pipeline."""
     gh = GitHub(sandbox_repo(), token())
     url = _remote(remote)
     with tempfile.TemporaryDirectory() as tmp:
-        built = {name: build_local(Path(tmp) / name, SCENARIOS[name]) for name in names}
-        first = next(iter(built.values()))
-        for name, refs in built.items():
-            for pr in gh.open_prs(head=refs.pr_branch):
-                gh.close_pr(pr["number"])
-                typer.echo(f"closed #{pr['number']} ({refs.pr_branch})", err=True)
-        _git(Path(first.repo), "push", "-q", "--force", url, f"{first.base}:refs/heads/main")
-        for name, refs in built.items():
-            _git(
-                Path(refs.repo),
-                "push",
-                "-q",
-                "--force",
-                url,
-                f"{refs.base}:refs/heads/base/{name}",
-                f"{refs.pr_head}:refs/heads/{refs.pr_branch}",
-            )
+        refs = build_waves(Path(tmp) / "waves")
+        repo = Path(refs.repo)
+        existing = {s: gh.open_prs(head=f"pr/{s}") for s in SCENARIOS}
+        if fresh:
+            for prs in existing.values():
+                for pr in prs:
+                    gh.close_pr(pr["number"])
+                    typer.echo(f"closed #{pr['number']}", err=True)
+            existing = {s: [] for s in SCENARIOS}
+        refspecs = [f"{refs.base}:refs/heads/main"]
+        refspecs += [f"{sha}:refs/heads/pr/{name}" for name, sha in refs.prs.items()]
+        _git(repo, "push", "-q", "--force", url, *refspecs)
+        stale = [
+            line.split("\t")[1]
+            for line in _git(repo, "ls-remote", url, "refs/heads/base/*").splitlines()
+            if "\t" in line
+        ]
+        if stale:
+            _git(repo, "push", "-q", "--delete", url, *stale)
+            typer.echo(f"deleted {len(stale)} old base/* branches", err=True)
         out = []
-        for name, refs in built.items():
-            s = SCENARIOS[name]
-            pr = gh.create_pr(refs.pr_branch, f"base/{name}", s.pr.title, pr_body(s))
+        for name, s in SCENARIOS.items():
+            fields = {"title": s.pr.title, "body": pr_body(s)}
+            if existing[name]:
+                pr = gh.update_pr(existing[name][0]["number"], base="main", **fields)
+                verb = "retargeted"
+            else:
+                pr = gh.create_pr(f"pr/{name}", "main", **fields)
+                verb = "opened"
             if label_approved:
                 gh.add_label(pr["number"], "rebase:approved")
-            typer.echo(f"opened #{pr['number']} {refs.pr_branch} -> base/{name}", err=True)
-            out.append({**asdict(refs), "pr_number": pr["number"], "pr_url": pr["html_url"]})
+            typer.echo(f"{verb} #{pr['number']} pr/{name} -> main", err=True)
+            out.append({"scenario": name, "pr_number": pr["number"], "pr_url": pr["html_url"]})
     typer.echo(json.dumps(out, indent=2))
 
 

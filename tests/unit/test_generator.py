@@ -107,7 +107,7 @@ def test_rebase_workflow_skips_resets_and_never_pushes_base():
     wf = read_template()[".github/workflows/rebase.yml"]
     assert "!github.event.forced" in wf  # generator resets are force-pushes
     assert "0000000000000000000000000000000000000000" in wf  # branch creation
-    assert 'branches: [main, "base/**"]' in wf
+    assert "branches: [main]" in wf
     assert "--push" in wf and "SANDBOX_REPO_TOKEN" in wf and "GITHUB_TOKEN" not in wf
 
 

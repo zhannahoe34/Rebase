@@ -90,6 +90,9 @@ class GitHub:
             json={"head": head, "base": base, "title": title, "body": body},
         )
 
+    def update_pr(self, number: int, **fields: str) -> dict:
+        return self._request("PATCH", f"/repos/{self.repo}/pulls/{number}", json=fields)
+
     def close_pr(self, number: int) -> None:
         self._request("PATCH", f"/repos/{self.repo}/pulls/{number}", json={"state": "closed"})
 
