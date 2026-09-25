@@ -99,7 +99,7 @@ class Workdir:
 
     def write_file(self, path: str, content: str) -> str:
         p = self.path(path)
-        rel = str(p.relative_to(self.root))
+        rel = p.relative_to(self.root).as_posix()
         if rel not in self.conflicted():
             raise ToolError(f"{rel}: not a conflicted file; only conflicted files may be written")
         p.write_text(content)
@@ -119,7 +119,7 @@ class Workdir:
 
     def git_add(self, path: str) -> str:
         p = self.path(path)
-        rel = str(p.relative_to(self.root))
+        rel = p.relative_to(self.root).as_posix()
         if rel not in self.conflicted():
             raise ToolError(f"{rel}: not a conflicted file")
         markers = ("<<<<<<<", "|||||||", ">>>>>>>")

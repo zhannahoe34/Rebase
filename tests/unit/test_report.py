@@ -79,8 +79,8 @@ def outcome() -> RunOutcome:
 def test_report_snapshot():
     text = render(outcome())
     if os.environ.get("UPDATE_SNAPSHOTS"):
-        SNAPSHOT.write_text(text)
-    assert text == SNAPSHOT.read_text()
+        SNAPSHOT.write_text(text, encoding="utf-8")
+    assert text == SNAPSHOT.read_text(encoding="utf-8")
 
 
 def test_every_final_renders():
