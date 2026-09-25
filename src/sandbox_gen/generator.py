@@ -267,13 +267,11 @@ def _push_waves(remote: str | None, *, fresh: bool, label_approved: bool) -> Non
     with tempfile.TemporaryDirectory() as tmp:
         refs = build_waves(Path(tmp) / "waves")
         repo = Path(refs.repo)
-        existing = {s: gh.open_prs(head=f"pr/{s}") for s in SCENARIOS}
         if fresh:
-            for prs in existing.values():
-                for pr in prs:
+            for name in SCENARIOS:
+                for pr in gh.open_prs(head=f"pr/{name}"):
                     gh.close_pr(pr["number"])
                     typer.echo(f"closed #{pr['number']}", err=True)
-            existing = {s: [] for s in SCENARIOS}
         refspecs = [f"{refs.base}:refs/heads/main"]
         refspecs += [f"{sha}:refs/heads/pr/{name}" for name, sha in refs.prs.items()]
         _git(repo, "push", "-q", "--force", url, *refspecs)
@@ -283,8 +281,14 @@ def _push_waves(remote: str | None, *, fresh: bool, label_approved: bool) -> Non
             if "\t" in line
         ]
         if stale:
-            _git(repo, "push", "-q", "--delete", url, *stale)
-            typer.echo(f"deleted {len(stale)} old base/* branches", err=True)
+            try:
+                _git(repo, "push", "-q", "--delete", url, *stale)
+                typer.echo(f"deleted {len(stale)} old base/* branches", err=True)
+            except RuntimeError as e:  # cleanup only; never block the reset on it
+                typer.echo(f"warning: could not delete {', '.join(stale)}: {e}", err=True)
+        # Look PRs up after pushing: when the template changes, the new commits share no
+        # history with an old PR's base and GitHub closes that PR on the force-push.
+        existing = {name: gh.open_prs(head=f"pr/{name}") for name in SCENARIOS}
         out = []
         for name, s in SCENARIOS.items():
             fields = {"title": s.pr.title, "body": pr_body(s)}
