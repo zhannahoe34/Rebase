@@ -102,3 +102,24 @@ def test_runtime_client_sends_model_key_and_max_tokens(monkeypatch):
     assert body["model"] == "claude-opus-5-5"
     assert body["max_tokens"] == 16000
     assert req.headers["x-api-key"] == "k-test"
+
+
+def test_setup_creates_output_dirs(tmp_path, monkeypatch):
+    """Seen live: on a fresh Actions runner ../out/ doesn't exist yet."""
+
+    from rebase_agent import cli
+
+    class NoPRs(cli.GitHub):
+        def open_prs(self, base=None, head=None):
+            return []
+
+    monkeypatch.setenv("SANDBOX_REPO_TOKEN", "t")
+    monkeypatch.setattr(cli, "GitHub", NoPRs)
+    out = tmp_path / "out"
+    result = CliRunner().invoke(
+        app,
+        ["setup", "--repo", ".", "--base", "HEAD", "--merged", "HEAD", "--github-base", "main",
+         "--out", str(out / "summary.json"), "--matrix-out", str(out / "prs.json")],
+    )  # fmt: skip
+    assert result.exit_code == 0, result.output
+    assert (out / "prs.json").read_text().strip() == "[]"

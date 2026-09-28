@@ -107,6 +107,12 @@ Each scenario is a base commit, a change merged to main, and an open PR. Its exp
 | 3 | `semantic_break` | Main changes a function signature; the PR adds a call using the old signature. Applies cleanly, tests fail | The verifier catches it and escalates (**headline demo case**) |
 | 4 | `migration_collision` | Both sides add a migration with the same number | The policy forces escalation; the resolver is never called |
 | 5 | `lockfile_touch` | Main updates a lockfile | The policy escalates |
+| 6 | `conflicting_intent` | Both sides rewrite the same lines of `reserve()` with contradictory behaviour | Escalated, never pushed: no mechanical resolution passes the tests (keep-both, ours and theirs all fail; unit-tested) |
+| 7 | `behavior_change` | Main changes what `apply_discount`'s argument means (percent to fraction), same signature; the PR adds a caller for the old meaning | Escalated: orchestrator, or the verifier via the failing tests |
+| 8 | `multi_file_conflict` | Resolvable conflicts in two files (`shipping.py`, `tax.py`, added to the template) | Resolver keeps both sides in both files → pushed |
+| 9 | `auth_touch` | The PR (not main) adds a function to `shop/auth/tokens.py` | Policy escalates (`auth:pr:`), though the change is safe |
+| 10 | `ci_touch` | The PR edits `.github/workflows/ci.yml` | Policy escalates (`ci:pr:`) |
+| 11 | `unapproved` | A clean PR with no approval label | Not in the matrix; no comment |
 
 The generator is idempotent: rerunning it resets the sandbox to a known state.
 
@@ -170,9 +176,36 @@ Why: BAML's built-in Rust client doesn't trust the cloud sandbox's egress CA, wh
 - **Verifier:** the intent check runs even when the tests fail, so the comment has both. On `semantic_break` the tests catch the break; the intent check says "preserved", because the diff does what the PR says.
 - **Per-PR cost in `RunOutcome`:** the rows written during that `run_pr` call, plus the run's shared merged-summary cost shown in full. `rebase-agent costs` shows the per-PR share.
 
+## D22 — Stale check allows changes confined to resolved conflicts (2026-09-25, decided)
+Q4 option 2, chosen by the user after a live dry run on sandbox PR #15. There, two PRs edited the same import line, so any correct resolution had to change the PR's own line, and strict Q4 escalated a rebase the agent had resolved and the verifier had passed.
+
+A changed PR patch may now be pushed if all of these hold:
+- the verifier passed (`run_pr` runs the stale check only after it);
+- every changed patch line is in a file that conflicted during the rebase;
+- every line of the approved patch that changed appeared inside a conflict hunk the resolver saw. The throwaway clone uses `merge.conflictStyle=diff3`, so the hunks include the base side.
+
+Anything else still escalates, including dropped or added commits, changes outside conflicted files, and any change on a clean rebase. The PR comment lists every changed line under "changed only inside resolved conflicts". Range-diff runs with `--creation-factor=100`, so small commits pair up and the reasons name lines instead of "dropped/added".
+
+## D23 — Sandbox layout and eligibility (2026-09-25, decided)
+- **Q5, layout:** every sandbox PR targets `main`, following the user's direction that "things typically PR into main". This replaces the per-scenario `base/<name>` layout tried first.
+  - Scenario merged changes land on `main` in waves of merge commits (`rebase-sandbox trigger --wave N`): code changes first, then the risky ones (migration, lockfile).
+  - One push to `main` fans out to every eligible open PR.
+- **Q2b, eligibility:** an APPROVED review (and no reviewer's latest review requesting changes), or the `rebase:approved` label. The label is the fallback because GitHub blocks self-approval and the session acts as the user. A GitHub App token can be swapped in later without code changes.
+- **Workflow ref:** the sandbox workflow checks out Rebase at `vars.REBASE_REF || 'main'`, so an unmerged phase branch can be tested. It must go back to `main` after merging.
+
+## D24 — Expanded scenarios (2026-09-25, decided)
+- Six scenarios added (D15 rows 6–11) for behaviours the first five didn't cover live: an unresolvable conflict, a semantic break with no signature change, a multi-file resolution, policy hits on the PR side (auth, CI), and eligibility filtering.
+- `Expected` gained `also_stages` for LLM-dependent escalations (`final` stays exact, the stage may be any listed one), and `Scenario` gained `approved` (`generate --push --label-approved` adds the label to approved scenarios and *removes* it from the others, so a stale label can't leak in).
+- `tests/unit/test_waves.py` checks every scenario's declared outcome against the policy computed for its wave, and that each PR in the shared wave conflicts only with its own merged change.
+- The template gained `shop/shipping.py` and `shop/tax.py` (with tests), which changes the base commit; the generator retargets the existing PRs on reset.
+- Windows fixes found while running the suite locally: `rmtree` of read-only git objects in the generator, forward-slash paths in the resolver tools, and an explicit UTF-8 read of the report snapshot.
+
 ## Changelog
 - 2026-09-24: Initial version from the kickoff brief.
 - 2026-09-24: D18 added from the user's answers to the open questions.
 - 2026-09-24: LLM key renamed to `REBASE_ANTHROPIC_API_KEY`; BAML transport blocker recorded as PLAN.md Q13.
 - 2026-09-24: D19 (transport, Q13 option 1) and D20 (Phase 2 additions) added.
 - 2026-09-24: D21 (Phase 3 choices) added.
+- 2026-09-25: D22 (Q4 option 2: stale check allows changes confined to resolved conflicts).
+- 2026-09-25: D23 (sandbox PRs target main with waves; label-based eligibility; REBASE_REF).
+- 2026-09-25: D24 (expanded scenarios 6–11; unapproved handling; Windows fixes).

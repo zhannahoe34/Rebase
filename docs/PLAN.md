@@ -3,32 +3,96 @@
 > **Read first in every session:** this file and `docs/DECISIONS.md`. Don't re-explore the repo. Update both files when a decision changes.
 
 - **Status:**
-  - Phase 1 done ([zhannahoe34/Rebase#2](https://github.com/zhannahoe34/Rebase/pull/2)). Generator `--push` mode is deferred to Phase 4.
-  - Phase 2 done ([#3](https://github.com/zhannahoe34/Rebase/pull/3), landed on `main` via [#4](https://github.com/zhannahoe34/Rebase/pull/4)).
-  - Phase 3 done, **waiting on review**. All acceptance tests pass with the real LLM and the real Agent SDK. LLM spend while building it was about $0.43.
-- **Next:** Phase 4 (GitHub Actions wiring), after Phase 3 review.
-- **Deadline:** demo on Mon Sept 28, 4 PM. The plan was written Thu Sept 24.
+  - Phases 1–3 done and on `main` ([#2](https://github.com/zhannahoe34/Rebase/pull/2), [#3](https://github.com/zhannahoe34/Rebase/pull/3) via [#4](https://github.com/zhannahoe34/Rebase/pull/4), [#5](https://github.com/zhannahoe34/Rebase/pull/5)).
+  - **Phase 4 works live** on branch `claude/serene-volta-qf6ed8` (ahead of `main`), **no PR yet**. The workflow runs end to end on GitHub: one matrix leg per eligible PR, a comment on each, and the resolved PRs force-pushed with the sandbox `ci` re-running green (so the push does not use `GITHUB_TOKEN`).
+  - Verified across 3 replays of the original 5 scenarios (identical outcomes each time) and 1 replay of the expanded set of 11 scenarios (wave 1, then wave 2). Wave 1 of the expanded set cost about $0.22 in LLM spend across 10 PRs (per-PR comments), plus the once-per-run merged summary.
+  - 332 unit tests pass, lint clean. The 23 LLM scenario tests were **not run locally** (no `REBASE_ANTHROPIC_API_KEY` on this machine); the live runs are the evidence for those outcomes. The verifier's live catch is only exercised through `--force-resolve` locally, because on GitHub the orchestrator escalated `semantic_break` and `behavior_change` first.
+- **Next:** open the Phase 4 PR against `main`; then Phases 5–6.
+- **Deadline:** demo on Mon Sept 28, 4 PM.
 
 ---
 
-## Handoff: start of the next session
+## Handoff: Phase 4 state
 
-### 1. Get the code
-- `main` is the default branch (switched 2026-09-24). Branch from `main` once the Phase 3 PR is merged; otherwise branch from the Phase 3 branch (`claude/serene-volta-qf6ed8`).
-- One PR per phase. **Open it against `main`, and re-check the base right before opening** (Phase 2 was once merged into a stale branch by mistake).
+### 1. Where things are
+- **Code:** branch `claude/serene-volta-qf6ed8`. Open the Phase 4 PR **against `main`**, and re-check the base right before opening.
+- **Sandbox repo `zhannahoe34/RebaseSandbox`** (public). After the last replay, `main` is at **wave 2**. Open PRs #15–#25 all target `main`; #25 (`unapproved`) deliberately has no label. Closed or merged PRs #1–#14 are from earlier layouts; ignore them. Five leftover `base/*` branches from the old layout are unused and can be deleted in the UI.
+- **Actions settings on the sandbox** (checked with `gh variable list` / `gh secret list`):
+  - secrets: `REBASE_ANTHROPIC_API_KEY`, `SANDBOX_REPO_TOKEN` (fine-grained PAT: Contents, Pull requests and Workflows read/write);
+  - variable: `REBASE_REF=claude/serene-volta-qf6ed8`.
+  - Set `REBASE_REF` back to `main`, or delete it, after the Phase 4 PR merges.
 
-### 2. Set up and check the key (don't skip)
+### 2. What the earlier "blocker" was (resolved)
+- The setup job exited 2 because `REBASE_REF` did not exist as a variable, so the workflow checked out Rebase `main` (Phase 3 code, which rejects `--github-base`). `SANDBOX_REPO_TOKEN` had also been saved as a variable (readable in a public repo) instead of a secret. Both were settings mistakes, not code bugs; the PAT was rotated.
+- A re-run replays the old context. After changing settings, test with a fresh push.
+
+### 3. How to run the live test
 ```bash
-uv sync
-make generate      # baml_client is gitignored; nothing imports until this runs
-make baml-smoke    # must be 5 passed, 0 skipped: the live call proves REBASE_ANTHROPIC_API_KEY works
-make lint
-make test          # 274 tests incl. real-LLM Phase 2+3 scenarios (~$0.19 per run)
-make sandbox       # builds .sandbox/<scenario> local repos
+export SANDBOX_REPO=zhannahoe34/RebaseSandbox SANDBOX_REPO_TOKEN="$(gh auth token)"
+R=https://github.com/zhannahoe34/rebasesandbox
+uv run rebase-sandbox generate --push --label-approved --remote $R   # reset: main=base, pr/<s> force-pushed, PRs retargeted/opened, approval label set (removed on unapproved scenarios)
+uv run rebase-sandbox trigger --wave 1 --remote $R                   # "merge": fast-forward main by wave 1 -> fires the workflow
+uv run rebase-sandbox trigger --wave 2 --remote $R                   # after wave 1's run has finished
 ```
-If the live call is skipped or fails, stop and tell the user before doing any Phase 4 work.
+- `trigger --wave N` refuses unless remote `main` is at wave N-1, so reset first to replay. Wait for a wave's run to finish before triggering the next.
+- On a machine without the session git proxy, the plain `--remote` URL needs credentials: pass `GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0= GIT_CONFIG_KEY_1=credential.helper GIT_CONFIG_VALUE_1='!gh auth git-credential'` in the environment, and `GIT_TERMINAL_PROMPT=0`.
+- With a local `gh` login you can read runs and logs directly: `gh run list -R $SANDBOX_REPO -w rebase`, `gh run view <id> --log-failed`.
+- **Expected outcomes** (pinned by `tests/unit/test_waves.py`, and declared per scenario in `sandbox_gen/scenarios/*.py`):
 
-### 3. Things already learned (don't re-discover them)
+| Wave | PR / scenario | Expected |
+|---|---|---|
+| 1 | trivial | clean → pushed |
+| 1 | real_conflict | resolver → pushed |
+| 1 | multi_file_conflict | resolver (2 files) → pushed |
+| 1 | semantic_break | escalated (orchestrator, or verifier if it gets that far) |
+| 1 | conflicting_intent | escalated, never pushed (orchestrator/resolver/verifier) |
+| 1 | behavior_change | escalated (orchestrator, or verifier) |
+| 1 | auth_touch | escalated at `policy` (PR touches `shop/auth/`) |
+| 1 | ci_touch | escalated at `policy` (PR edits the CI workflow) |
+| 1 | unapproved | not in the matrix, no comment |
+| 1 | lockfile_touch | clean → pushed (its own diff touches no lockfile; the lockfile change lands in wave 2) |
+| 1 | migration_collision | escalated at `policy` (the PR adds a migration) |
+| 2 | every eligible open PR | escalated at `policy` (the merged change adds a migration and bumps the lockfile) |
+
+- **Acceptance** (Phase 4 section), all met in the live runs: one workflow run with a matrix leg per eligible PR; a comment on every eligible PR matching the table; resolved PRs force-pushed with sandbox `ci` re-running green; the PR description links the run URLs.
+
+### 4. Phase 4 design (what's built)
+- **Sandbox layout (Q5, decided: D23):**
+  - All PRs target `main`. Each scenario has `pr/<name>`, and every scenario shares one base commit.
+  - Scenario "merged changes" land on `main` in **waves** (`sandbox_gen.scenarios.WAVES`): wave 1 = code (trivial, real_conflict, semantic_break, conflicting_intent, behavior_change, multi_file_conflict, auth_touch, ci_touch, unapproved), wave 2 = risky (migration_collision, lockfile_touch). Risky changes get their own wave because policy escalates every PR whose merged change touches migrations or lockfiles.
+  - **Merging the sandbox PRs themselves in the UI does not exercise the scenarios.** Only #15 and #16 overlap each other. The user did this once by accident.
+- **Eligibility (Q2b, decided: D23):** an APPROVED review (with no reviewer's latest review requesting changes) or the `rebase:approved` label. The label exists because this session acts as the user, and GitHub blocks self-approval.
+- **Workflow** (`src/sandbox_gen/template/.github/workflows/rebase.yml`, installed into the sandbox by the generator):
+  - Triggers on push to `main`, and skips force-pushes and branch creation, so resets never run the pipeline.
+  - The `setup` job lists eligible PRs, computes the merged summary once (skipped when nothing is eligible, so it costs $0), and writes the matrix.
+  - The `rebase` matrix job runs `run-pr --pr N --push` and uploads the ledgers as artifacts.
+  - It checks out Rebase at `vars.REBASE_REF || 'main'`.
+- **Generator:**
+  - `generate --push` force-resets `main` and the `pr/*` branches, then looks up open PRs *after* pushing, retargeting existing ones (`--fresh` closes and reopens instead). A template change closes the PRs anyway, via GitHub's auto-close on unrelated history.
+  - `trigger --wave N` does the "merge".
+  - Deleting old `base/*` branches is best-effort.
+- **Push and comment:**
+  - `github_api.push()` runs `--force-with-lease=<branch>:<expected sha>` from the throwaway clone. The URL carries the token on the command line only, and the token is scrubbed from any error.
+  - A lease rejection becomes an escalation at `push`.
+  - `run_pr(push=PushTarget(...))`; `None` means a dry run.
+  - The CLI posts the comment on every outcome, errors included.
+- **Stale check (D22, user-chosen Q4 option 2):**
+  - A changed PR patch is still pushed if every changed line is in a conflicted file, every changed line of the approved patch was inside a conflict hunk (the clone uses `merge.conflictStyle=diff3`), and the verifier passed.
+  - The comment lists the changed lines.
+  - Range-diff uses `--creation-factor=100`. With the default, small commits went unpaired and showed as "dropped + added".
+- **Also fixed in Phase 4:**
+  - The sandbox template's `uv.lock` was locked with `exclude-newer` that `pyproject.toml` didn't declare, so sandbox CI failed on every run (a Phase 1 bug, now covered by a regression test).
+  - `setup` output dirs (the `../out/` directories now exist on a fresh runner).
+
+### 5. Setup checks for the new session
+```bash
+uv sync && make generate
+make baml-smoke   # 5 passed, 0 skipped (REBASE_ANTHROPIC_API_KEY)
+make lint
+uv run pytest tests/unit -q   # 332 pass; `make test` adds the real-LLM scenarios (~$0.19)
+```
+
+### 6. Things already learned (don't re-discover them)
 - **The LLM key is `REBASE_ANTHROPIC_API_KEY`**, not `ANTHROPIC_API_KEY`.
   - `clients.baml` reads `env.REBASE_ANTHROPIC_API_KEY`.
   - Runtime `ClientRegistry` clients get it as `options["api_key"]`.
@@ -52,20 +116,19 @@ If the live call is skipped or fails, stop and tell the user before doing any Ph
 - **BAML 0.226.2 syntax:** enum values must be capitalized, so use a literal union for lowercase strings. `b.with_options(client_registry=...)` gives `.request.Fn` / `.parse.Fn`.
 - **Ruff 0.16:** enforces `PLW1510` (explicit `check=`), `ISC004` (parenthesize implicit concatenation in lists) and `PLW1508` (env defaults must be `str`). `docs/` is excluded.
 - **Scenarios:** `sandbox_gen.scenarios.SCENARIOS[name]`. In the local repos: tag `base` = main before the push, `main` = after, `pr/<name>` = the PR.
-- **Phase 3 API (for Phase 4 to build on):**
-  - `pipeline.run_pr(repo, base, merged, pr_branch, merged_summary, ledger=, force_resolve=, push=False)` → `RunOutcome`. It never raises; errors become `final="error"`. `push=True` raises `NotImplementedError` until Phase 4.
-  - `resolver.agent.prepare_workdir(repo, onto, head)` → `(workdir, onto_sha, head_sha)`. The clone has **no remote**, so Phase 4's push must add one outside the agent.
+- **Phase 3/4 API:**
+  - `pipeline.run_pr(repo, base, merged, pr_branch, merged_summary, ledger=, pr_number=, force_resolve=, push=PushTarget|None)` → `RunOutcome`. It never raises.
+  - `resolver.agent.prepare_workdir(repo, onto, head)` → `(workdir, onto_sha, head_sha)`. The clone has no remote.
   - `report.render(outcome)` → comment markdown.
-  - CLI: `rebase-agent run-pr --repo --pr-branch --base [--merged-summary] [--force-resolve] [--run-dir]` writes `outcome-*.json` and `.md` next to the ledger.
-  - `REBASE_KEEP_WORKDIR=1` keeps the temp clone for debugging.
+  - CLI:
+    - `rebase-agent setup [--github-base BRANCH --matrix-out F]`
+    - `rebase-agent run-pr (--pr-branch B | --pr N [--push] [--no-comment]) --base --merged [--merged-summary] [--force-resolve] [--run-dir]`
+  - `REBASE_KEEP_WORKDIR=1` keeps the temp clone.
+- **GitHub from this session:**
+  - The GitHub MCP tools and `$GH_TOKEN` act as the user (`zhannahoe34`).
+  - REST reads, writes to PRs and labels, and pushes (through the git proxy, using the plain URL) all work.
+  - Blocked by the proxy: branch deletion, `/actions/variables`, `/actions/secrets`, and Actions log downloads.
 - **Git conventions (user preference):** no `Co-Authored-By`, `Claude-Session` or other attribution lines in commits or PR descriptions.
-
-### 4. Phase 4 checklist
-See the Phase 4 section. First confirm Q2b and Q5, and get `RebaseSandbox` access (below).
-
-### 5. Coming later
-- **Phase 4 needs `RebaseSandbox` access.** Try `add_repo` first; if that fails, stop and ask the user to switch the session's repo.
-- **Q2b** (a GitHub App token for authoring sandbox PRs) and **Q5** (per-scenario base branches) need confirming at the start of Phase 4.
 
 ---
 
@@ -592,6 +655,7 @@ Never cut: policy tests, the verifier, or honest PR notes.
   - On the normal path, record what the orchestrator decided (the stage, decision and reasons) in test output and the eval table, as a note rather than a pass or fail.
   - Symbol overlap stays definitions-only (done in Phase 1).
 - **Q4 — Stale check.** Accepted: "patch unchanged" means identical added and removed lines per commit, ignoring context and hunk headers. `real_conflict` already has this property (tested in Phase 1).
+  - **Revised 2026-09-25 (option 2, DECISIONS D22):** a changed patch is also allowed when every change is confined to resolved conflicts and the verifier passed; the comment lists the changed lines.
 - **Q5 — GitHub layout.** Not final, but the user prefers **branches over reusing `main`**. Working proposal for Phase 4:
   - Each scenario (or wave) gets its own long-lived base branch, e.g. `base/<scenario>`, that stands in for `main`.
   - PRs target that branch, and the workflow triggers on pushes to `main` and `base/**`.
@@ -607,7 +671,7 @@ Never cut: policy tests, the verifier, or honest PR notes.
 
 ## Open questions
 
-- **Q2b — Who authors sandbox PRs?** If the generator opens PRs with the user's PAT, the user is the author and GitHub blocks self-approval. Options:
+- **Q2b — Who authors sandbox PRs?** *(Resolved for now, D23: the `rebase:approved` label counts as approval; a GitHub App can be swapped in later.)* If the generator opens PRs with the user's PAT, the user is the author and GitHub blocks self-approval. Options:
   1. **GitHub App token** for the generator, so PRs are authored by the app's bot account and the user can approve. It also satisfies "PAT or App token".
   2. A second GitHub account opens the PRs.
   3. Fall back to the `approved` label.

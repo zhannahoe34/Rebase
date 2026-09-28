@@ -45,9 +45,12 @@ Op = Write | Replace | Append | CopyAsset
 class Expected:
     """End-to-end outcome; the acceptance test for later phases."""
 
-    final: Literal["pushed", "escalated"]
-    stage: Literal["policy", "orchestrator", "resolver", "verifier", "stale", "push"]
+    final: Literal["pushed", "escalated", "skipped"]
+    stage: Literal["eligibility", "policy", "orchestrator", "resolver", "verifier", "stale", "push"]
     note: str
+    # LLM-dependent escalations can legitimately end at more than one stage; `final` is
+    # still exact. Empty for deterministic outcomes.
+    also_stages: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -64,6 +67,9 @@ class Scenario:
     merged: Change
     pr: Change
     expected: Expected
+    # False: the generator leaves the PR without the approval label, so the workflow must
+    # skip it (no matrix leg, no comment).
+    approved: bool = True
     # Exact expected values for Signals fields (checked by tests/unit/test_scenario_signals.py).
     expected_signals: dict = field(default_factory=dict)
 

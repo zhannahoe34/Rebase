@@ -13,6 +13,7 @@ from rebase_agent import pipeline
 from rebase_agent.ledger import Ledger
 from rebase_agent.pipeline import run_pr, summarize_merged
 from rebase_agent.report import render
+from sandbox_gen.scenarios import SCENARIOS
 
 pytestmark = [
     pytest.mark.llm,
@@ -81,7 +82,52 @@ def test_semantic_break_normal_path_note(scenario_repos, llm_run_dir, capsys):
     assert o.final != "pushed"
 
 
-@pytest.mark.parametrize("name", ["migration_collision", "lockfile_touch"])
+def assert_never_pushed_at_expected_stage(name, o):
+    """For LLM-dependent escalations: `final` is exact, the stage may be any listed one."""
+    want = SCENARIOS[name].expected
+    assert o.final == want.final == "escalated", o.error
+    assert o.stage in (want.stage, *want.also_stages), (o.stage, o.error)
+
+
+def test_conflicting_intent_is_never_pushed(scenario_repos, llm_run_dir, capsys):
+    """A conflict no resolver can settle: escalate at the orchestrator, or (if it tries) at
+    the resolver or verifier. Pushing anything would be the failure."""
+    o = run("conflicting_intent", scenario_repos, llm_run_dir, capsys)
+    assert o.final == "escalated"
+    assert_never_pushed_at_expected_stage("conflicting_intent", o)
+
+
+def test_behavior_change_force_resolve_caught_by_verifier(scenario_repos, llm_run_dir, capsys):
+    o = run(
+        "behavior_change", scenario_repos, llm_run_dir, capsys, tag="-force", force_resolve=True
+    )
+    assert o.resolver.status == "clean"
+    assert not o.verifier.tests_passed
+    assert "pct must be between 0 and 1" in o.verifier.test_output_tail
+    assert (o.stage, o.final) == ("verifier", "escalated")
+
+
+def test_behavior_change_normal_path_is_never_pushed(scenario_repos, llm_run_dir, capsys):
+    o = run("behavior_change", scenario_repos, llm_run_dir, capsys)
+    with capsys.disabled():
+        d = o.decision.orchestrator
+        print(f"[behavior_change] NOTE orchestrator={d.action} ({d.confidence}): {d.reasons}")
+    assert o.final == "escalated"
+    assert_never_pushed_at_expected_stage("behavior_change", o)
+
+
+def test_multi_file_conflict_resolved_and_would_push(scenario_repos, llm_run_dir, capsys):
+    o = run("multi_file_conflict", scenario_repos, llm_run_dir, capsys)
+    assert o.resolver.status == "resolved", o.resolver.reason
+    assert set(o.resolver.files_touched) == {"shop/shipping.py", "shop/tax.py"}
+    assert o.verifier.tests_passed and o.verifier.verdict == "pass"
+    assert o.stale.unchanged, o.stale.reasons
+    assert (o.final, o.dry_run) == ("pushed", True)
+
+
+@pytest.mark.parametrize(
+    "name", ["migration_collision", "lockfile_touch", "auth_touch", "ci_touch"]
+)
 def test_policy_scenarios_never_reach_resolver(
     name, scenario_repos, llm_run_dir, capsys, monkeypatch
 ):

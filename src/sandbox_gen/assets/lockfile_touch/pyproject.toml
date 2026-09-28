@@ -13,3 +13,4 @@ testpaths = ["tests"]
 
 [tool.uv]
 package = false
+exclude-newer = "2026-09-01T00:00:00Z"

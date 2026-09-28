@@ -35,7 +35,7 @@ def render(o: RunOutcome) -> str:
         ),
     ]
     if o.error:
-        lines += ["", f"**Error:** {o.error}"]
+        lines += ["", f"**{'Error' if o.final == 'error' else 'Reason'}:** {o.error}"]
 
     if o.decision:
         d = o.decision
@@ -102,7 +102,14 @@ def render(o: RunOutcome) -> str:
         lines += [
             "",
             "#### Stale-approval check",
-            f"- PR patch unchanged by the rebase: {'yes' if st.unchanged else 'NO'}",
+            (
+                "- PR patch unchanged by the rebase: yes"
+                if st.unchanged
+                else "- PR patch changed **only inside resolved conflicts** (allowed: "
+                "review these lines)"
+                if st.within_conflicts
+                else "- PR patch unchanged by the rebase: NO"
+            ),
             *[f"  - {r}" for r in st.reasons],
         ]
         lines += _details("git range-diff", st.range_diff or "(empty)")

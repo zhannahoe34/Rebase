@@ -1,0 +1,75 @@
+name: rebase
+# When main moves, rebase or escalate every eligible open PR that targets it.
+# Eligible = an APPROVED review or the `rebase:approved` label (PLAN.md Q2b).
+# Pushes only PR branches, never main, so it can't retrigger itself.
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: rebase-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  REBASE_REPO: zhannahoe34/Rebase
+  REBASE_REF: ${{ vars.REBASE_REF || 'main' }}
+  SANDBOX_REPO: ${{ github.repository }}
+  SANDBOX_REPO_TOKEN: ${{ secrets.SANDBOX_REPO_TOKEN }}
+  REBASE_ANTHROPIC_API_KEY: ${{ secrets.REBASE_ANTHROPIC_API_KEY }}
+
+jobs:
+  setup:
+    # Skip branch creation and force-pushes (the generator's resets); only a real
+    # fast-forward of main is a "merge".
+    if: ${{ !github.event.forced && github.event.before != '0000000000000000000000000000000000000000' }}
+    runs-on: ubuntu-latest
+    outputs:
+      prs: ${{ steps.list.outputs.prs }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: sandbox, fetch-depth: 0 }
+      - uses: actions/checkout@v4
+        with: { repository: "${{ env.REBASE_REPO }}", ref: "${{ env.REBASE_REF }}", path: rebase }
+      - uses: astral-sh/setup-uv@v6
+      - working-directory: rebase
+        run: uv sync --locked && uv run baml-cli generate
+      - id: list
+        working-directory: rebase
+        run: |
+          uv run rebase-agent setup --repo ../sandbox \
+            --base "${{ github.event.before }}" --merged "${{ github.event.after }}" \
+            --github-base "${{ github.ref_name }}" \
+            --out ../out/summary.json --matrix-out ../out/prs.json --run-dir ../out/runs/setup
+          echo "prs=$(cat ../out/prs.json)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with: { name: setup, path: out, include-hidden-files: true }
+
+  rebase:
+    needs: setup
+    if: ${{ needs.setup.outputs.prs != '' && needs.setup.outputs.prs != '[]' }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pr: ${{ fromJson(needs.setup.outputs.prs) }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: sandbox, fetch-depth: 0 }
+      - uses: actions/checkout@v4
+        with: { repository: "${{ env.REBASE_REPO }}", ref: "${{ env.REBASE_REF }}", path: rebase }
+      - uses: astral-sh/setup-uv@v6
+      - working-directory: rebase
+        run: uv sync --locked && uv run baml-cli generate
+      - uses: actions/download-artifact@v4
+        with: { name: setup, path: setup }
+      - working-directory: rebase
+        run: |
+          uv run rebase-agent run-pr --repo ../sandbox --pr ${{ matrix.pr }} \
+            --base "${{ github.event.before }}" --merged "${{ github.event.after }}" \
+            --merged-summary ../setup/summary.json --push --run-dir ../out/runs/pr-${{ matrix.pr }}
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with: { name: "pr-${{ matrix.pr }}", path: out, include-hidden-files: true }
